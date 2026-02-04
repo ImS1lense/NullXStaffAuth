@@ -59,7 +59,7 @@ const getRedirectUri = () => {
       return `${window.location.origin}/`; 
   }
   // Запасной вариант (замените на ваш реальный домен Vercel)
-  return 'https://o-auth2-null-x.vercel.app/';
+  return 'https://o-auth2-null-x.vercel.app';
 };
 
 interface DiscordUser {

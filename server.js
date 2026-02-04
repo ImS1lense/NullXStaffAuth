@@ -13,14 +13,21 @@ const LOG_CHANNEL_ID = '1458163321302945946';
 const STAFF_ROLE_ID = '1458158245700046901'; 
 
 // === ВАЖНО: НАСТРОЙКА ДОСТУПА (CORS) ===
+// === НАСТРОЙКА ДОСТУПА (CORS) ===
 app.use(cors({
-    origin: [
-        'https://o-auth2-null-x.vercel.app', // Твой сайт на Vercel
-        'http://localhost:3000',             // Локальная разработка
-        'http://localhost:5173'              // Vite локально
-    ],
-    credentials: true, // Разрешаем куки и заголовки авторизации
-    methods: ['GET', 'POST', 'OPTIONS']
+    origin: function (origin, callback) {
+        // Разрешаем запросы без origin (например, если тестировать через Postman)
+        if (!origin) return callback(null, true);
+        
+        // Разрешаем ВСЕ поддомены vercel.app и локалку
+        if (origin.includes('vercel.app') || origin.includes('localhost')) {
+            return callback(null, true);
+        }
+        
+        console.log("⛔ Блокировка CORS для:", origin);
+        return callback(new Error('Not allowed by CORS'));
+    },
+    credentials: true
 }));
 
 app.use(express.json());
