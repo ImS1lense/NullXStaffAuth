@@ -1,7 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-const { Client, GatewayIntentBits, Partials, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
+const { Client, GatewayIntentBits, Partials, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, Events } = require('discord.js');
 
 const app = express();
 const PORT = process.env.PORT || 4000;
@@ -16,10 +16,9 @@ const RANK_ROLE_IDS = [
 ];
 
 // === MOCK DATABASE (IN-MEMORY) ===
-// В реальном проекте используйте MongoDB или PostgreSQL
 const MOCK_DB = {
     logs: [], // { targetId, adminId, action, reason, date }
-    loa: {}   // { userId: { start: timestamp, end: timestamp, active: boolean } }
+    loa: {}   // { userId: { start: timestamp, end: timestamp, active: boolean, reason: string } }
 };
 
 app.use(cors({
@@ -53,6 +52,56 @@ if (!process.env.DISCORD_BOT_TOKEN) {
 
 client.once('ready', () => {
     console.log(`✅ Bot ready: ${client.user.tag}`);
+});
+
+// === INTERACTION HANDLER FOR EXCUSES ===
+client.on(Events.InteractionCreate, async interaction => {
+    try {
+        // Handle Button Click
+        if (interaction.isButton()) {
+            if (interaction.customId === 'write_excuse') {
+                const modal = new ModalBuilder()
+                    .setCustomId('excuse_modal')
+                    .setTitle('Написать объяснительную');
+
+                const reasonInput = new TextInputBuilder()
+                    .setCustomId('excuse_reason')
+                    .setLabel("Причина / Оправдание")
+                    .setPlaceholder("Опишите ситуацию подробно...")
+                    .setStyle(TextInputStyle.Paragraph)
+                    .setRequired(true);
+
+                const firstActionRow = new ActionRowBuilder().addComponents(reasonInput);
+                modal.addComponents(firstActionRow);
+
+                await interaction.showModal(modal);
+            }
+        } 
+        // Handle Modal Submit
+        else if (interaction.isModalSubmit()) {
+            if (interaction.customId === 'excuse_modal') {
+                const reason = interaction.fields.getTextInputValue('excuse_reason');
+                
+                await interaction.reply({ content: '✅ Ваша объяснительная отправлена руководству.', ephemeral: true });
+
+                // Send Log to Channel
+                const channel = await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
+                if (channel) {
+                    const embed = new EmbedBuilder()
+                        .setTitle('📝 ПОЛУЧЕНА ОБЪЯСНИТЕЛЬНАЯ')
+                        .setColor(0x3B82F6) // Blue
+                        .addFields(
+                            { name: 'От сотрудника', value: `<@${interaction.user.id}> (${interaction.user.tag})`, inline: true },
+                            { name: 'Текст', value: reason }
+                        )
+                        .setTimestamp();
+                    await channel.send({ embeds: [embed] });
+                }
+            }
+        }
+    } catch (error) {
+        console.error("Interaction error:", error);
+    }
 });
 
 async function logActionToDiscord(action, targetUser, adminUser, reason, details = "") {
@@ -106,26 +155,28 @@ app.get('/api/staff', async (req, res) => {
     }
 });
 
-// Получить логи конкретного юзера
 app.get('/api/logs/:userId', (req, res) => {
     const userId = req.params.userId;
     const userLogs = MOCK_DB.logs.filter(l => l.targetId === userId).reverse();
     res.json(userLogs);
 });
 
-// Установить LOA (Неактив)
 app.post('/api/loa', async (req, res) => {
-    const { userId, active, duration } = req.body;
+    const { userId, active, duration, reason } = req.body;
     
     MOCK_DB.loa[userId] = {
         active: active,
         start: Date.now(),
-        end: duration ? Date.now() + (duration * 24 * 60 * 60 * 1000) : null
+        end: duration ? Date.now() + (duration * 24 * 60 * 60 * 1000) : null,
+        reason: reason || "Без причины"
     };
 
     try {
         const user = await client.users.fetch(userId);
-        logActionToDiscord('loa', user, user, active ? `Ushol v neaktiv (${duration || '?'} days)` : "Vernulsya iz neaktiva", active ? "LOA Active" : "LOA Ended");
+        const details = active 
+            ? `Срок: ${duration} дн. Причина: ${reason}` 
+            : "Вернулся из неактива";
+        logActionToDiscord('loa', user, user, active ? "Ушел в неактив" : "Снял неактив", details);
     } catch(e) {}
 
     res.json({ success: true, active });
@@ -178,19 +229,18 @@ app.post('/api/action', async (req, res) => {
 
             case 'warn':
                 logDetails = `Warn ${warnCount}/3`;
-                // Отправка DM с кнопкой
                 try {
                     const row = new ActionRowBuilder()
                         .addComponents(
                             new ButtonBuilder()
                                 .setCustomId('write_excuse')
                                 .setLabel('Написать объяснительную')
-                                .setStyle(ButtonStyle.Secondary)
+                                .setStyle(ButtonStyle.Primary) 
                                 .setEmoji('📝')
                         );
                     
                     await member.send({ 
-                        content: `⚠️ **ВЫ ПОЛУЧИЛИ ПРЕДУПРЕЖДЕНИЕ**\n\n**Причина:** ${reason}\n**Администратор:** <@${adminId}>\n**Счетчик:** ${warnCount}/3\n\nЕсли вы не согласны, нажмите кнопку ниже.`,
+                        content: `⚠️ **ВЫ ПОЛУЧИЛИ ПРЕДУПРЕЖДЕНИЕ**\n\n**Причина:** ${reason}\n**Администратор:** <@${adminId}>\n**Счетчик:** ${warnCount}/3\n\nЕсли вы считаете наказание несправедливым, нажмите кнопку ниже для подачи апелляции/объяснительной.`,
                         components: [row]
                     });
                 } catch(e) { logDetails += " (DM Failed)"; }
@@ -198,7 +248,7 @@ app.post('/api/action', async (req, res) => {
                 
             case 'unwarn':
                 logDetails = `Unwarned`;
-                try { await member.send(`✅ **Варн снят!**\nПричина: ${reason}`); } catch(e) {}
+                try { await member.send(`✅ **Варн снят!**\nПричина снятия: ${reason}`); } catch(e) {}
                 break;
             
             default: return res.status(400).json({ error: 'Unknown action' });

@@ -5,7 +5,7 @@ import {
     RefreshCw, ChevronLeft, ArrowUpCircle, 
     ArrowDownCircle, UserPlus, Trash2, Check, AlertTriangle, Eye,
     Send, X, Loader2, AlertCircle, History, User, Coffee, Sparkles, Volume2,
-    LayoutDashboard, Terminal, Activity, Zap
+    LayoutDashboard, Terminal, Activity, Zap, Shield
 } from 'lucide-react';
 
 // ==========================================
@@ -24,11 +24,6 @@ const PROD_API_URL = 'https://nullx-backend.onrender.com/api';
 const API_URL = (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'))
     ? 'http://localhost:4000/api'
     : PROD_API_URL;
-
-const SOUNDS = {
-    hover: "data:audio/wav;base64,UklGRl9vT1BXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YU...", 
-    click: "data:audio/wav;base64,..."
-};
 
 const playSound = (type: 'hover' | 'click') => {
     try {
@@ -135,6 +130,11 @@ const LoginPage: React.FC = () => {
   const [targetRoleId, setTargetRoleId] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
 
+  // LOA Modal State
+  const [showLoaModal, setShowLoaModal] = useState(false);
+  const [loaDuration, setLoaDuration] = useState(7);
+  const [loaReason, setLoaReason] = useState('');
+
   const isAdmin = user && ALLOWED_ADMIN_IDS.includes(user.id);
 
   useEffect(() => {
@@ -234,21 +234,37 @@ const LoginPage: React.FC = () => {
       }
   };
 
-  const toggleLOA = async () => {
-      if (!user) return;
-      playSound('click');
+  const handleLoaClick = () => {
       const me = staffList.find(s => s.isCurrentUser);
-      if (!me) return;
-      const newState = !me.loa;
+      if (me?.loa) {
+          // If active, just turn off (return from leave)
+          submitLoa(false);
+      } else {
+          // If inactive, show modal
+          setShowLoaModal(true);
+      }
+  };
+
+  const submitLoa = async (active: boolean) => {
+      if (!user) return;
       try {
           await fetch(`${API_URL}/loa`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ userId: user.id, active: newState, duration: 7 })
+               method: 'POST',
+               headers: { 'Content-Type': 'application/json' },
+               body: JSON.stringify({ 
+                   userId: user.id, 
+                   active, 
+                   duration: active ? loaDuration : 0, 
+                   reason: active ? loaReason : '' 
+               })
           });
-          setStaffList(prev => prev.map(s => s.id === user.id ? { ...s, loa: newState } : s));
+          
+          setStaffList(prev => prev.map(s => s.id === user.id ? { ...s, loa: active } : s));
+          setShowLoaModal(false);
+          setSuccessMsg(active ? 'LOA ACTIVATED' : 'LOA ENDED');
+          setTimeout(() => setSuccessMsg(''), 2000);
       } catch(e) {}
-  };
+  }
 
   const filteredStaff = staffList.filter(s => s.displayName.toLowerCase().includes(searchQuery.toLowerCase()));
 
@@ -289,6 +305,49 @@ const LoginPage: React.FC = () => {
           </div>
       )}
 
+      {/* LOA MODAL */}
+      {showLoaModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+              <div className="bg-[#0a0a0a] border border-white/10 rounded-2xl w-full max-w-md p-6 relative animate-in zoom-in-95 duration-200">
+                  <button onClick={() => setShowLoaModal(false)} className="absolute top-4 right-4 text-zinc-500 hover:text-white"><X className="w-5 h-5"/></button>
+                  <div className="flex items-center gap-3 mb-6">
+                      <div className="p-2 bg-amber-500/10 rounded-lg border border-amber-500/20">
+                          <Coffee className="w-5 h-5 text-amber-500" />
+                      </div>
+                      <h3 className="text-lg font-bold uppercase tracking-tight">Request Leave (LOA)</h3>
+                  </div>
+                  
+                  <div className="space-y-4">
+                      <div>
+                          <label className="text-[10px] font-bold text-zinc-500 uppercase block mb-2">Duration (Days)</label>
+                          <input 
+                            type="number" 
+                            value={loaDuration}
+                            onChange={(e) => setLoaDuration(parseInt(e.target.value))}
+                            className="w-full bg-black border border-white/10 p-3 rounded-xl text-sm outline-none focus:border-purple-500 transition-colors"
+                            min="1" max="30"
+                          />
+                      </div>
+                      <div>
+                          <label className="text-[10px] font-bold text-zinc-500 uppercase block mb-2">Reason</label>
+                          <textarea 
+                            value={loaReason}
+                            onChange={(e) => setLoaReason(e.target.value)}
+                            placeholder="Why are you going inactive?"
+                            className="w-full bg-black border border-white/10 p-3 rounded-xl text-sm h-24 outline-none focus:border-purple-500 transition-colors resize-none"
+                          ></textarea>
+                      </div>
+                      <button 
+                        onClick={() => submitLoa(true)}
+                        className="w-full py-3 bg-white text-black font-black uppercase rounded-xl hover:bg-zinc-200 transition-colors text-xs tracking-widest mt-2"
+                      >
+                          Confirm Inactive Status
+                      </button>
+                  </div>
+              </div>
+          </div>
+      )}
+
       {/* SIDEBAR */}
       <div className="w-[80px] md:w-[320px] bg-[#050505] border-r border-white/5 flex flex-col z-20 transition-all duration-300">
           {/* Header */}
@@ -313,10 +372,10 @@ const LoginPage: React.FC = () => {
                   </div>
               </div>
               <button 
-                  onClick={toggleLOA}
-                  className={`w-full py-2 rounded-lg text-[10px] font-bold uppercase tracking-wider border transition-all flex items-center justify-center gap-2 ${staffList.find(s => s.isCurrentUser)?.loa ? 'bg-purple-900/20 border-purple-500/50 text-purple-300' : 'bg-zinc-900 border-zinc-800 text-zinc-500 hover:border-zinc-700 hover:text-zinc-300'}`}
+                  onClick={handleLoaClick}
+                  className={`w-full py-2 rounded-lg text-[10px] font-bold uppercase tracking-wider border transition-all flex items-center justify-center gap-2 ${staffList.find(s => s.isCurrentUser)?.loa ? 'bg-amber-900/20 border-amber-500/50 text-amber-500 hover:bg-amber-900/40' : 'bg-zinc-900 border-zinc-800 text-zinc-500 hover:border-zinc-700 hover:text-zinc-300'}`}
               >
-                  <Coffee className="w-3 h-3" /> {staffList.find(s => s.isCurrentUser)?.loa ? 'LOA Active' : 'Set Inactive'}
+                  <Coffee className="w-3 h-3" /> {staffList.find(s => s.isCurrentUser)?.loa ? 'End LOA' : 'Set Inactive'}
               </button>
           </div>
 
@@ -348,7 +407,7 @@ const LoginPage: React.FC = () => {
                       <div className="flex items-center justify-center md:justify-start gap-3">
                           <div className="relative shrink-0">
                               <img src={s.avatarUrl} className="w-8 h-8 rounded-md bg-zinc-900 object-cover grayscale group-hover:grayscale-0 transition-all" />
-                              {s.loa && <div className="absolute -top-1 -right-1 bg-purple-600 w-2.5 h-2.5 rounded-full border-2 border-[#050505]"></div>}
+                              {s.loa && <div className="absolute -top-1 -right-1 bg-amber-600 w-2.5 h-2.5 rounded-full border-2 border-[#050505]"></div>}
                           </div>
                           <div className="hidden md:block overflow-hidden">
                               <div className={`font-bold text-xs truncate ${selectedStaff?.id === s.id ? 'text-white' : 'text-zinc-400 group-hover:text-zinc-200'}`}>{s.displayName}</div>
@@ -400,24 +459,19 @@ const LoginPage: React.FC = () => {
                               {/* AVATAR BOX */}
                               <div className="shrink-0 relative">
                                   <div className="w-40 h-40 rounded-2xl bg-zinc-900 border border-white/10 overflow-hidden relative shadow-2xl">
-                                      {/* Using Minotar BUST for head+shoulders look */}
                                       <img 
                                           src={`https://minotar.net/armor/bust/${selectedStaff.displayName}/300.png`}
                                           className="w-full h-full object-cover"
                                           style={{ imageRendering: 'pixelated' }}
                                           onError={(e) => { (e.target as HTMLImageElement).src = `https://minotar.net/helm/MHF_Steve/300.png`; }}
                                       />
-                                      {/* Scanline overlay */}
                                       <div className="absolute inset-0 bg-[linear-gradient(transparent_50%,rgba(0,0,0,0.5)_50%)] bg-[length:100%_4px] opacity-20 pointer-events-none"></div>
                                       <div className="absolute bottom-0 w-full h-1 bg-purple-500 shadow-[0_0_10px_purple]"></div>
-                                  </div>
-                                  <div className={`absolute -bottom-3 -right-3 w-8 h-8 rounded-xl border-[4px] border-[#0a0a0a] flex items-center justify-center ${selectedStaff.status === 'online' ? 'bg-emerald-500' : 'bg-zinc-600'}`}>
-                                      <Activity className="w-4 h-4 text-black" />
                                   </div>
                               </div>
 
                               {/* INFO */}
-                              <div className="flex-1 w-full">
+                              <div className="flex-1 w-full pt-2">
                                   <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-4">
                                       <div>
                                           <h1 className="text-4xl font-black text-white tracking-tighter uppercase mb-2">{selectedStaff.displayName}</h1>
@@ -428,6 +482,17 @@ const LoginPage: React.FC = () => {
                                               <div className="px-3 py-1 rounded bg-zinc-900 border border-zinc-800 text-zinc-500 text-[10px] font-mono">
                                                   ID: {selectedStaff.id}
                                               </div>
+                                              
+                                              {/* STATUS INDICATOR */}
+                                              <div className={`px-3 py-1 rounded border text-[10px] font-bold uppercase flex items-center gap-2 ${
+                                                  selectedStaff.status === 'online' 
+                                                  ? 'bg-emerald-900/20 border-emerald-500/50 text-emerald-400' 
+                                                  : 'bg-zinc-900 border-zinc-700 text-zinc-500'
+                                              }`}>
+                                                  <div className={`w-2 h-2 rounded-full ${selectedStaff.status === 'online' ? 'bg-emerald-500 animate-pulse' : 'bg-zinc-600'}`}></div>
+                                                  {selectedStaff.status === 'online' ? 'ONLINE' : 'OFFLINE'}
+                                              </div>
+
                                               {selectedStaff.loa && (
                                                   <div className="px-3 py-1 rounded bg-amber-900/20 border border-amber-500/50 text-amber-500 text-[10px] font-bold uppercase flex items-center gap-2">
                                                       <Coffee className="w-3 h-3" /> ON LEAVE
@@ -451,32 +516,14 @@ const LoginPage: React.FC = () => {
                                           </button>
                                       </div>
                                   </div>
-                                  
-                                  {/* Quick Stats */}
-                                  <div className="grid grid-cols-3 gap-4 mt-6 pt-6 border-t border-white/5">
-                                      <div>
-                                          <div className="text-[9px] text-zinc-500 uppercase tracking-widest mb-1">Warning Level</div>
-                                          <div className="h-2 w-full bg-zinc-900 rounded-full overflow-hidden">
-                                              <div className="h-full bg-emerald-500 w-[10%]"></div>
-                                          </div>
-                                      </div>
-                                      <div>
-                                          <div className="text-[9px] text-zinc-500 uppercase tracking-widest mb-1">Playtime (Week)</div>
-                                          <div className="text-sm font-mono text-white">24h 12m</div>
-                                      </div>
-                                      <div>
-                                          <div className="text-[9px] text-zinc-500 uppercase tracking-widest mb-1">Reports Handled</div>
-                                          <div className="text-sm font-mono text-white">142</div>
-                                      </div>
-                                  </div>
                               </div>
                           </div>
                       </div>
 
                       {/* CONTENT TABS */}
                       {viewTab === 'profile' ? (
-                          <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-                              {/* LEFT COL: ACTIONS */}
+                          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+                              {/* ACTIONS */}
                               <div className="lg:col-span-2 space-y-6">
                                   {isAdmin ? (
                                       <div className="bg-[#0a0a0a] border border-white/5 rounded-3xl p-8">
@@ -488,7 +535,7 @@ const LoginPage: React.FC = () => {
                                           </div>
 
                                           {!actionType ? (
-                                              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                                              <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
                                                   <button onClick={() => setActionType('promote')} className="h-24 rounded-2xl bg-emerald-900/10 border border-emerald-500/20 hover:bg-emerald-500/20 hover:border-emerald-500/50 hover:scale-[1.02] transition-all flex flex-col items-center justify-center gap-2 group">
                                                       <ArrowUpCircle className="w-6 h-6 text-emerald-500 group-hover:text-white transition-colors" />
                                                       <span className="text-[10px] font-black uppercase text-emerald-400 tracking-wider">Promote</span>
@@ -500,6 +547,10 @@ const LoginPage: React.FC = () => {
                                                   <button onClick={() => setActionType('warn')} className="h-24 rounded-2xl bg-yellow-900/10 border border-yellow-500/20 hover:bg-yellow-500/20 hover:border-yellow-500/50 hover:scale-[1.02] transition-all flex flex-col items-center justify-center gap-2 group">
                                                       <AlertTriangle className="w-6 h-6 text-yellow-500 group-hover:text-white transition-colors" />
                                                       <span className="text-[10px] font-black uppercase text-yellow-400 tracking-wider">Warn</span>
+                                                  </button>
+                                                  <button onClick={() => setActionType('unwarn')} className="h-24 rounded-2xl bg-blue-900/10 border border-blue-500/20 hover:bg-blue-500/20 hover:border-blue-500/50 hover:scale-[1.02] transition-all flex flex-col items-center justify-center gap-2 group">
+                                                      <ShieldCheck className="w-6 h-6 text-blue-500 group-hover:text-white transition-colors" />
+                                                      <span className="text-[10px] font-black uppercase text-blue-400 tracking-wider">Unwarn</span>
                                                   </button>
                                                   <button onClick={() => setActionType('kick')} className="h-24 rounded-2xl bg-red-900/10 border border-red-500/20 hover:bg-red-500/20 hover:border-red-500/50 hover:scale-[1.02] transition-all flex flex-col items-center justify-center gap-2 group">
                                                       <Trash2 className="w-6 h-6 text-red-500 group-hover:text-white transition-colors" />
@@ -571,27 +622,6 @@ const LoginPage: React.FC = () => {
                                       </div>
                                   )}
                               </div>
-
-                              {/* RIGHT COL: INFO */}
-                              <div className="space-y-6">
-                                  <div className="bg-[#0a0a0a] border border-white/5 rounded-3xl p-6">
-                                      <h3 className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-4">Metadata</h3>
-                                      <div className="space-y-3">
-                                          <div className="flex justify-between items-center py-2 border-b border-white/5">
-                                              <span className="text-xs text-zinc-500">Joined</span>
-                                              <span className="text-xs font-mono text-white">24 Oct 2023</span>
-                                          </div>
-                                          <div className="flex justify-between items-center py-2 border-b border-white/5">
-                                              <span className="text-xs text-zinc-500">Reports</span>
-                                              <span className="text-xs font-mono text-emerald-400">98% Positive</span>
-                                          </div>
-                                          <div className="flex justify-between items-center py-2 border-b border-white/5">
-                                              <span className="text-xs text-zinc-500">Region</span>
-                                              <span className="text-xs font-mono text-white">EU-Central</span>
-                                          </div>
-                                      </div>
-                                  </div>
-                              </div>
                           </div>
                       ) : (
                           <div className="bg-[#0a0a0a] border border-white/5 rounded-3xl p-8 min-h-[500px]">
@@ -613,6 +643,8 @@ const LoginPage: React.FC = () => {
                                                           log.action === 'promote' ? 'bg-emerald-500/10 text-emerald-400' :
                                                           log.action === 'warn' ? 'bg-yellow-500/10 text-yellow-400' :
                                                           log.action === 'kick' ? 'bg-red-500/10 text-red-400' :
+                                                          log.action === 'unwarn' ? 'bg-blue-500/10 text-blue-400' :
+                                                          log.action === 'loa' ? 'bg-purple-500/10 text-purple-400' :
                                                           'bg-zinc-800 text-zinc-400'
                                                       }`}>{log.action}</span>
                                                       <span className="text-[10px] font-mono text-zinc-600">{new Date(log.date).toLocaleString()}</span>
