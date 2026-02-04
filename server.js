@@ -10,15 +10,21 @@ const GUILD_ID = process.env.GUILD_ID || '1458138848822431770';
 const LOG_CHANNEL_ID = '1458163321302945946'; 
 const STAFF_ROLE_ID = '1458158245700046901'; 
 
+// Roles sorted from Lowest (0) to Highest (5)
 const RANK_ROLE_IDS = [
-    "1459285694458626222", "1458158059187732666", "1458158896894967879",
-    "1458159110720589944", "1458159802105594061", "1458277039399374991"
+    "1459285694458626222", // Trainee
+    "1458158059187732666", // Jr. Mod
+    "1458158896894967879", // Moderator
+    "1458159110720589944", // Sr. Mod
+    "1458159802105594061", // Chief
+    "1458277039399374991"  // Curator
 ];
 
 // === MOCK DATABASE (IN-MEMORY) ===
 const MOCK_DB = {
-    logs: [], // { targetId, adminId, action, reason, date }
-    loa: {}   // { userId: { start: timestamp, end: timestamp, active: boolean, reason: string } }
+    logs: [], // { id, targetId, adminId, action, reason, date }
+    loa: {},   // { userId: { start: timestamp, end: timestamp, active: boolean, reason: string } }
+    appeals: [] // { id, userId, warnId (optional), text, status: 'pending'|'approved'|'rejected', date }
 };
 
 app.use(cors({
@@ -57,7 +63,6 @@ client.once('ready', () => {
 // === INTERACTION HANDLER FOR EXCUSES ===
 client.on(Events.InteractionCreate, async interaction => {
     try {
-        // Handle Button Click
         if (interaction.isButton()) {
             if (interaction.customId === 'write_excuse') {
                 const modal = new ModalBuilder()
@@ -77,19 +82,29 @@ client.on(Events.InteractionCreate, async interaction => {
                 await interaction.showModal(modal);
             }
         } 
-        // Handle Modal Submit
         else if (interaction.isModalSubmit()) {
             if (interaction.customId === 'excuse_modal') {
                 const reason = interaction.fields.getTextInputValue('excuse_reason');
                 
-                await interaction.reply({ content: '✅ Ваша объяснительная отправлена руководству.', ephemeral: true });
+                // Save to DB
+                const appealObj = {
+                    id: Date.now().toString(),
+                    userId: interaction.user.id,
+                    username: interaction.user.username,
+                    text: reason,
+                    status: 'pending',
+                    date: new Date().toISOString()
+                };
+                MOCK_DB.appeals.push(appealObj);
 
-                // Send Log to Channel
+                await interaction.reply({ content: '✅ Ваша объяснительная отправлена руководству. Ожидайте решения.', ephemeral: true });
+
+                // Log to Discord Channel
                 const channel = await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
                 if (channel) {
                     const embed = new EmbedBuilder()
                         .setTitle('📝 ПОЛУЧЕНА ОБЪЯСНИТЕЛЬНАЯ')
-                        .setColor(0x3B82F6) // Blue
+                        .setColor(0x3B82F6) 
                         .addFields(
                             { name: 'От сотрудника', value: `<@${interaction.user.id}> (${interaction.user.tag})`, inline: true },
                             { name: 'Текст', value: reason }
@@ -135,7 +150,8 @@ app.get('/api/staff', async (req, res) => {
         const guild = await client.guilds.fetch(GUILD_ID).catch(() => null);
         if (!guild) return res.status(404).json({ error: 'Guild not found' });
 
-        try { await guild.members.fetch(); } catch (e) {}
+        // Ensure we fetch presences to show Online/Offline correctly
+        await guild.members.fetch({ withPresences: true });
 
         const staffMembers = guild.members.cache.filter(member => member.roles.cache.has(STAFF_ROLE_ID));
 
@@ -146,7 +162,7 @@ app.get('/api/staff', async (req, res) => {
             avatar: m.user.avatar,
             roles: m.roles.cache.map(r => r.id),
             status: m.presence ? m.presence.status : 'offline',
-            loa: MOCK_DB.loa[m.id]?.active || false // Добавляем статус LOA
+            loa: MOCK_DB.loa[m.id] || null
         }));
 
         res.json(result);
@@ -161,15 +177,66 @@ app.get('/api/logs/:userId', (req, res) => {
     res.json(userLogs);
 });
 
+// Endpoint for Notification Polling
+app.get('/api/updates', (req, res) => {
+    // Return counts so client can check if something changed
+    res.json({
+        logsCount: MOCK_DB.logs.length,
+        appealsCount: MOCK_DB.appeals.length,
+        lastLog: MOCK_DB.logs[MOCK_DB.logs.length - 1],
+        lastAppeal: MOCK_DB.appeals[MOCK_DB.appeals.length - 1]
+    });
+});
+
+app.get('/api/appeals', (req, res) => {
+    // Returns pending appeals
+    res.json(MOCK_DB.appeals.filter(a => a.status === 'pending').reverse());
+});
+
+app.post('/api/appeals/resolve', async (req, res) => {
+    const { appealId, action, adminId } = req.body; // action: 'approve' | 'reject'
+    
+    const appeal = MOCK_DB.appeals.find(a => a.id === appealId);
+    if (!appeal) return res.status(404).json({ error: "Appeal not found" });
+
+    appeal.status = action === 'approve' ? 'approved' : 'rejected';
+
+    try {
+        const user = await client.users.fetch(appeal.userId);
+        if (action === 'approve') {
+            await user.send(`✅ **Ваша апелляция принята!**\nВарн будет снят.`);
+            // Automatically log an Unwarn action here if needed, or rely on admin to do it. 
+            // For better UX, let's just log it as Unwarn system action.
+             MOCK_DB.logs.push({
+                targetId: appeal.userId,
+                adminId: adminId,
+                action: 'unwarn',
+                reason: 'Апелляция одобрена',
+                date: new Date().toISOString()
+            });
+            logActionToDiscord('unwarn', user, { id: adminId }, 'Апелляция одобрена', `Appeal ID: ${appealId}`);
+
+        } else {
+            await user.send(`❌ **Ваша апелляция отклонена.**\nРешение администрации окончательно.`);
+        }
+    } catch(e) {}
+
+    res.json({ success: true });
+});
+
 app.post('/api/loa', async (req, res) => {
     const { userId, active, duration, reason } = req.body;
     
-    MOCK_DB.loa[userId] = {
-        active: active,
-        start: Date.now(),
-        end: duration ? Date.now() + (duration * 24 * 60 * 60 * 1000) : null,
-        reason: reason || "Без причины"
-    };
+    if (active) {
+        MOCK_DB.loa[userId] = {
+            active: true,
+            start: Date.now(),
+            end: Date.now() + (duration * 24 * 60 * 60 * 1000),
+            reason: reason || "Без причины"
+        };
+    } else {
+        if (MOCK_DB.loa[userId]) MOCK_DB.loa[userId].active = false;
+    }
 
     try {
         const user = await client.users.fetch(userId);
@@ -192,69 +259,82 @@ app.post('/api/action', async (req, res) => {
         if (!member) return res.status(404).json({ error: 'Member not found' });
 
         let logDetails = "";
+        let finalAction = action;
+
+        // Auto Promote/Demote Logic
+        if (action === 'promote' || action === 'demote') {
+            // 1. Find current rank index
+            const currentRoleIds = member.roles.cache.map(r => r.id);
+            let currentRankIndex = -1;
+            
+            // Find highest rank they have
+            for (let i = RANK_ROLE_IDS.length - 1; i >= 0; i--) {
+                if (currentRoleIds.includes(RANK_ROLE_IDS[i])) {
+                    currentRankIndex = i;
+                    break;
+                }
+            }
+
+            let newRankIndex = currentRankIndex;
+            if (action === 'promote') newRankIndex++;
+            if (action === 'demote') newRankIndex--;
+
+            // Boundary checks
+            if (newRankIndex < 0) return res.status(400).json({ error: "Нельзя понизить ниже Стажера." });
+            if (newRankIndex >= RANK_ROLE_IDS.length) return res.status(400).json({ error: "Достигнут максимальный ранг." });
+
+            const newRoleId = RANK_ROLE_IDS[newRankIndex];
+            
+            // Apply changes
+            // Remove all other rank roles to be clean
+            const rolesToRemove = member.roles.cache
+                .filter(role => RANK_ROLE_IDS.includes(role.id) && role.id !== newRoleId)
+                .map(role => role.id);
+            
+            if (rolesToRemove.length > 0) await member.roles.remove(rolesToRemove);
+            await member.roles.add(newRoleId, reason);
+            
+            logDetails = `Auto: ${currentRankIndex} -> ${newRankIndex} (<@&${newRoleId}>)`;
+        } 
+        else if (action === 'kick') {
+             if (!member.kickable) return res.status(403).json({ error: 'Not kickable' });
+             await member.kick(reason);
+             logDetails = "Kicked";
+        }
+        else if (action === 'warn') {
+             logDetails = `Warn ${warnCount}/3`;
+             try {
+                const row = new ActionRowBuilder()
+                    .addComponents(
+                        new ButtonBuilder()
+                            .setCustomId('write_excuse')
+                            .setLabel('Написать объяснительную')
+                            .setStyle(ButtonStyle.Primary) 
+                            .setEmoji('📝')
+                    );
+                
+                await member.send({ 
+                    content: `⚠️ **ВЫ ПОЛУЧИЛИ ПРЕДУПРЕЖДЕНИЕ**\n\n**Причина:** ${reason}\n**Администратор:** <@${adminId}>\n**Счетчик:** ${warnCount}/3\n\nЕсли вы считаете наказание несправедливым, нажмите кнопку ниже для подачи апелляции/объяснительной.`,
+                    components: [row]
+                });
+            } catch(e) { logDetails += " (DM Failed)"; }
+        }
+        else if (action === 'unwarn') {
+            logDetails = `Unwarned manually`;
+            try { await member.send(`✅ **Варн снят!**\nПричина снятия: ${reason}`); } catch(e) {}
+        }
 
         // Записываем в "БД"
         MOCK_DB.logs.push({
+            id: Date.now().toString(),
             targetId,
             adminId,
-            action,
+            action: finalAction,
             reason,
             date: new Date().toISOString()
         });
 
-        switch (action) {
-            case 'kick':
-                if (!member.kickable) return res.status(403).json({ error: 'Not kickable' });
-                await member.kick(reason);
-                logDetails = "Kicked";
-                break;
-
-            case 'promote':
-            case 'demote':
-                if (!targetRoleId) return res.status(400).json({ error: 'No role specified' });
-                const rolesToRemove = member.roles.cache
-                    .filter(role => RANK_ROLE_IDS.includes(role.id) && role.id !== targetRoleId)
-                    .map(role => role.id);
-                if (rolesToRemove.length > 0) await member.roles.remove(rolesToRemove);
-                await member.roles.add(targetRoleId, reason);
-                logDetails = `Role changed to <@&${targetRoleId}>`;
-                break;
-
-            case 'hire':
-                if (!targetRoleId) return res.status(400).json({ error: 'No role specified' });
-                await member.roles.add(targetRoleId, reason);
-                if (STAFF_ROLE_ID && !member.roles.cache.has(STAFF_ROLE_ID)) await member.roles.add(STAFF_ROLE_ID);
-                logDetails = `Hired as <@&${targetRoleId}>`;
-                break;
-
-            case 'warn':
-                logDetails = `Warn ${warnCount}/3`;
-                try {
-                    const row = new ActionRowBuilder()
-                        .addComponents(
-                            new ButtonBuilder()
-                                .setCustomId('write_excuse')
-                                .setLabel('Написать объяснительную')
-                                .setStyle(ButtonStyle.Primary) 
-                                .setEmoji('📝')
-                        );
-                    
-                    await member.send({ 
-                        content: `⚠️ **ВЫ ПОЛУЧИЛИ ПРЕДУПРЕЖДЕНИЕ**\n\n**Причина:** ${reason}\n**Администратор:** <@${adminId}>\n**Счетчик:** ${warnCount}/3\n\nЕсли вы считаете наказание несправедливым, нажмите кнопку ниже для подачи апелляции/объяснительной.`,
-                        components: [row]
-                    });
-                } catch(e) { logDetails += " (DM Failed)"; }
-                break;
-                
-            case 'unwarn':
-                logDetails = `Unwarned`;
-                try { await member.send(`✅ **Варн снят!**\nПричина снятия: ${reason}`); } catch(e) {}
-                break;
-            
-            default: return res.status(400).json({ error: 'Unknown action' });
-        }
-
-        logActionToDiscord(action, member.user, { id: adminId }, reason, logDetails);
+        logActionToDiscord(finalAction, member.user, { id: adminId }, reason, logDetails);
         res.json({ success: true });
 
     } catch (error) {

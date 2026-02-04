@@ -5,7 +5,7 @@ import {
     RefreshCw, ChevronLeft, ArrowUpCircle, 
     ArrowDownCircle, UserPlus, Trash2, Check, AlertTriangle, Eye,
     Send, X, Loader2, AlertCircle, History, User, Coffee, Sparkles, Volume2,
-    LayoutDashboard, Terminal, Activity, Zap, Shield
+    LayoutDashboard, Terminal, Activity, Zap, Shield, Calendar, FileText, Bell
 } from 'lucide-react';
 
 // ==========================================
@@ -63,12 +63,12 @@ interface RoleDef {
 }
 
 const ROLE_DEFINITIONS: Record<string, Omit<RoleDef, 'id'>> = {
-    "1459285694458626222": { name: "TRAINEE", color: "text-blue-400", weight: 1, bg: "bg-blue-500/10 border-blue-500/20" },
-    "1458158059187732666": { name: "JR. MODERATOR", color: "text-emerald-400", weight: 2, bg: "bg-emerald-500/10 border-emerald-500/20" },
-    "1458158896894967879": { name: "MODERATOR", color: "text-purple-400", weight: 3, bg: "bg-purple-500/10 border-purple-500/20" },
-    "1458159110720589944": { name: "SR. MODERATOR", color: "text-red-400", weight: 4, bg: "bg-red-500/10 border-red-500/20" },
-    "1458159802105594061": { name: "CHIEF MODERATOR", color: "text-red-600", weight: 5, bg: "bg-red-600/10 border-red-600/20" },
-    "1458277039399374991": { name: "CURATOR", color: "text-amber-400", weight: 6, bg: "bg-amber-500/10 border-amber-500/20" },
+    "1459285694458626222": { name: "СТАЖЁР", color: "text-blue-400", weight: 1, bg: "bg-blue-500/10 border-blue-500/20" },
+    "1458158059187732666": { name: "МЛ. МОДЕРАТОР", color: "text-emerald-400", weight: 2, bg: "bg-emerald-500/10 border-emerald-500/20" },
+    "1458158896894967879": { name: "МОДЕРАТОР", color: "text-purple-400", weight: 3, bg: "bg-purple-500/10 border-purple-500/20" },
+    "1458159110720589944": { name: "СТ. МОДЕРАТОР", color: "text-red-400", weight: 4, bg: "bg-red-500/10 border-red-500/20" },
+    "1458159802105594061": { name: "ШЕФ МОДЕРАТОР", color: "text-red-600", weight: 5, bg: "bg-red-600/10 border-red-600/20" },
+    "1458277039399374991": { name: "КУРАТОР", color: "text-amber-400", weight: 6, bg: "bg-amber-500/10 border-amber-500/20" },
 };
 
 interface StaffDisplay {
@@ -83,7 +83,7 @@ interface StaffDisplay {
     isCurrentUser: boolean;
     status: string;
     weight: number;
-    loa: boolean;
+    loa: { active: boolean, start: number, end: number, reason: string } | null;
 }
 
 const ParticleBackground = () => {
@@ -115,20 +115,65 @@ const ParticleBackground = () => {
     return <canvas ref={canvasRef} className="absolute inset-0 z-0 opacity-20 pointer-events-none" />;
 };
 
+// --- Calendar Component ---
+const CalendarView = ({ loa }: { loa: StaffDisplay['loa'] }) => {
+    const today = new Date();
+    const daysInMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0).getDate();
+    const days = Array.from({ length: daysInMonth }, (_, i) => i + 1);
+
+    const isLoaDay = (day: number) => {
+        if (!loa || !loa.active) return false;
+        const checkDate = new Date(today.getFullYear(), today.getMonth(), day).getTime();
+        return checkDate >= loa.start && checkDate <= loa.end;
+    };
+
+    return (
+        <div className="bg-[#0a0a0a] border border-white/5 rounded-3xl p-6 mt-6">
+            <h3 className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-4 flex items-center gap-2">
+                <Calendar className="w-4 h-4" /> Календарь Активности (Текущий месяц)
+            </h3>
+            <div className="grid grid-cols-7 gap-2">
+                {days.map(d => (
+                    <div 
+                        key={d} 
+                        className={`
+                            h-10 rounded-lg flex items-center justify-center text-xs font-bold border transition-all
+                            ${isLoaDay(d) 
+                                ? 'bg-amber-500/20 border-amber-500/50 text-amber-500 shadow-[0_0_10px_rgba(245,158,11,0.2)]' 
+                                : 'bg-black/50 border-white/5 text-zinc-600'
+                            }
+                            ${d === today.getDate() ? 'border-white text-white' : ''}
+                        `}
+                    >
+                        {d}
+                    </div>
+                ))}
+            </div>
+            {loa && loa.active && (
+                <div className="mt-4 p-3 bg-amber-900/10 border border-amber-500/20 rounded-xl text-xs text-amber-500 flex items-center gap-2">
+                    <Coffee className="w-4 h-4" />
+                    <span>Сотрудник в отпуске до {new Date(loa.end).toLocaleDateString()}</span>
+                </div>
+            )}
+        </div>
+    );
+};
+
 const LoginPage: React.FC = () => {
   const [user, setUser] = useState<any>(null);
   const [staffList, setStaffList] = useState<StaffDisplay[]>([]);
   const [selectedStaff, setSelectedStaff] = useState<StaffDisplay | null>(null);
   const [loading, setLoading] = useState(false);
-  const [viewTab, setViewTab] = useState<'profile' | 'history'>('profile');
+  const [viewTab, setViewTab] = useState<'profile' | 'history' | 'appeals'>('profile');
   const [actionType, setActionType] = useState<string | null>(null);
   const [isSending, setIsSending] = useState(false);
   const [successMsg, setSuccessMsg] = useState('');
   const [userLogs, setUserLogs] = useState<any[]>([]);
+  const [appeals, setAppeals] = useState<any[]>([]);
   const [actionReason, setActionReason] = useState('');
   const [warnCount, setWarnCount] = useState(1);
-  const [targetRoleId, setTargetRoleId] = useState('');
   const [searchQuery, setSearchQuery] = useState('');
+  const [lastLogCount, setLastLogCount] = useState(0);
 
   // LOA Modal State
   const [showLoaModal, setShowLoaModal] = useState(false);
@@ -143,7 +188,36 @@ const LoginPage: React.FC = () => {
         localStorage.setItem('discord_token', token);
         fetchUser(token);
     }
+    
+    // Request Notification Permission
+    if (Notification.permission !== "granted") {
+        Notification.requestPermission();
+    }
   }, []);
+
+  // Polling for Notifications
+  useEffect(() => {
+    if (!user) return;
+    const interval = setInterval(async () => {
+        try {
+            const res = await fetch(`${API_URL}/updates`);
+            const data = await res.json();
+            
+            if (lastLogCount > 0 && data.logsCount > lastLogCount) {
+                // Trigger Notification
+                if (Notification.permission === "granted") {
+                    new Notification("NULLX Panel", {
+                        body: `Новое действие: ${data.lastLog.action.toUpperCase()} от ${data.lastLog.adminId}`,
+                        icon: 'https://cdn-icons-png.flaticon.com/512/566/566736.png'
+                    });
+                }
+            }
+            if (data.logsCount !== lastLogCount) setLastLogCount(data.logsCount);
+        } catch(e) {}
+    }, 10000); // Check every 10 sec
+
+    return () => clearInterval(interval);
+  }, [user, lastLogCount]);
 
   const fetchUser = async (token: string) => {
       setLoading(true);
@@ -182,7 +256,7 @@ const LoginPage: React.FC = () => {
                  roleBg: bestRole.bg,
                  status: m.status,
                  isCurrentUser: m.id === myId,
-                 loa: m.loa,
+                 loa: m.loa ? { ...m.loa, active: m.loa.active } : null,
                  weight: bestRole.weight
              };
           }).sort((a: any, b: any) => b.weight - a.weight);
@@ -196,6 +270,14 @@ const LoginPage: React.FC = () => {
           const data = await res.json();
           setUserLogs(data);
       } catch(e) { setUserLogs([]); }
+  };
+
+  const fetchAppeals = async () => {
+      try {
+          const res = await fetch(`${API_URL}/appeals`);
+          const data = await res.json();
+          setAppeals(data);
+      } catch(e) {}
   };
 
   const handleSelectStaff = (member: StaffDisplay) => {
@@ -217,30 +299,42 @@ const LoginPage: React.FC = () => {
             body: JSON.stringify({
                 action: actionType,
                 targetId: selectedStaff.id,
-                targetRoleId,
+                targetRoleId: null, // Auto calculated on server
                 reason: actionReason,
                 warnCount,
                 adminId: user.id
             })
         });
-        setSuccessMsg('SYSTEM: Action Executed Successfully');
+        setSuccessMsg('СИСТЕМА: Действие выполнено успешно');
         setTimeout(() => setSuccessMsg(''), 2000);
         setActionType(null);
         fetchLogs(selectedStaff.id); 
+        fetchStaffList(user.id); // Refresh roles
       } catch(e) {
-          alert("Execution Failed");
+          alert("Ошибка выполнения");
       } finally {
           setIsSending(false);
       }
   };
 
+  const handleAppealResolve = async (appealId: string, action: 'approve' | 'reject') => {
+      try {
+          await fetch(`${API_URL}/appeals/resolve`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ appealId, action, adminId: user.id })
+          });
+          setSuccessMsg(action === 'approve' ? 'Апелляция принята' : 'Апелляция отклонена');
+          setTimeout(() => setSuccessMsg(''), 2000);
+          fetchAppeals();
+      } catch(e) {}
+  };
+
   const handleLoaClick = () => {
       const me = staffList.find(s => s.isCurrentUser);
-      if (me?.loa) {
-          // If active, just turn off (return from leave)
+      if (me?.loa && me.loa.active) {
           submitLoa(false);
       } else {
-          // If inactive, show modal
           setShowLoaModal(true);
       }
   };
@@ -259,9 +353,9 @@ const LoginPage: React.FC = () => {
                })
           });
           
-          setStaffList(prev => prev.map(s => s.id === user.id ? { ...s, loa: active } : s));
+          await fetchStaffList(user.id);
           setShowLoaModal(false);
-          setSuccessMsg(active ? 'LOA ACTIVATED' : 'LOA ENDED');
+          setSuccessMsg(active ? 'НЕАКТИВ ВКЛЮЧЕН' : 'НЕАКТИВ ВЫКЛЮЧЕН');
           setTimeout(() => setSuccessMsg(''), 2000);
       } catch(e) {}
   }
@@ -285,7 +379,7 @@ const LoginPage: React.FC = () => {
                   </div>
                   <div className="text-left">
                       <div className="text-[10px] uppercase tracking-[0.2em] text-zinc-500 font-bold mb-1">Nullx Access</div>
-                      <div className="text-xl font-black text-white tracking-tight">AUTHENTICATE</div>
+                      <div className="text-xl font-black text-white tracking-tight">АВТОРИЗАЦИЯ</div>
                   </div>
               </div>
           </button>
@@ -314,12 +408,12 @@ const LoginPage: React.FC = () => {
                       <div className="p-2 bg-amber-500/10 rounded-lg border border-amber-500/20">
                           <Coffee className="w-5 h-5 text-amber-500" />
                       </div>
-                      <h3 className="text-lg font-bold uppercase tracking-tight">Request Leave (LOA)</h3>
+                      <h3 className="text-lg font-bold uppercase tracking-tight">Взять Неактив (LOA)</h3>
                   </div>
                   
                   <div className="space-y-4">
                       <div>
-                          <label className="text-[10px] font-bold text-zinc-500 uppercase block mb-2">Duration (Days)</label>
+                          <label className="text-[10px] font-bold text-zinc-500 uppercase block mb-2">Длительность (Дней)</label>
                           <input 
                             type="number" 
                             value={loaDuration}
@@ -329,11 +423,11 @@ const LoginPage: React.FC = () => {
                           />
                       </div>
                       <div>
-                          <label className="text-[10px] font-bold text-zinc-500 uppercase block mb-2">Reason</label>
+                          <label className="text-[10px] font-bold text-zinc-500 uppercase block mb-2">Причина</label>
                           <textarea 
                             value={loaReason}
                             onChange={(e) => setLoaReason(e.target.value)}
-                            placeholder="Why are you going inactive?"
+                            placeholder="Почему вы уходите в неактив?"
                             className="w-full bg-black border border-white/10 p-3 rounded-xl text-sm h-24 outline-none focus:border-purple-500 transition-colors resize-none"
                           ></textarea>
                       </div>
@@ -341,7 +435,7 @@ const LoginPage: React.FC = () => {
                         onClick={() => submitLoa(true)}
                         className="w-full py-3 bg-white text-black font-black uppercase rounded-xl hover:bg-zinc-200 transition-colors text-xs tracking-widest mt-2"
                       >
-                          Confirm Inactive Status
+                          Подтвердить статус
                       </button>
                   </div>
               </div>
@@ -355,7 +449,7 @@ const LoginPage: React.FC = () => {
                 <div className="w-10 h-10 bg-purple-600 rounded-lg flex items-center justify-center font-black text-black shadow-[0_0_15px_rgba(147,51,234,0.3)]">NX</div>
                 <div className="hidden md:block ml-4">
                     <div className="font-black text-lg tracking-tight">NULLX</div>
-                    <div className="text-[9px] text-zinc-600 uppercase tracking-widest font-bold">Control Panel</div>
+                    <div className="text-[9px] text-zinc-600 uppercase tracking-widest font-bold">Панель Управления</div>
                 </div>
           </div>
 
@@ -373,9 +467,9 @@ const LoginPage: React.FC = () => {
               </div>
               <button 
                   onClick={handleLoaClick}
-                  className={`w-full py-2 rounded-lg text-[10px] font-bold uppercase tracking-wider border transition-all flex items-center justify-center gap-2 ${staffList.find(s => s.isCurrentUser)?.loa ? 'bg-amber-900/20 border-amber-500/50 text-amber-500 hover:bg-amber-900/40' : 'bg-zinc-900 border-zinc-800 text-zinc-500 hover:border-zinc-700 hover:text-zinc-300'}`}
+                  className={`w-full py-2 rounded-lg text-[10px] font-bold uppercase tracking-wider border transition-all flex items-center justify-center gap-2 ${staffList.find(s => s.isCurrentUser)?.loa?.active ? 'bg-amber-900/20 border-amber-500/50 text-amber-500 hover:bg-amber-900/40' : 'bg-zinc-900 border-zinc-800 text-zinc-500 hover:border-zinc-700 hover:text-zinc-300'}`}
               >
-                  <Coffee className="w-3 h-3" /> {staffList.find(s => s.isCurrentUser)?.loa ? 'End LOA' : 'Set Inactive'}
+                  <Coffee className="w-3 h-3" /> {staffList.find(s => s.isCurrentUser)?.loa?.active ? 'Снять Неактив' : 'Взять Неактив'}
               </button>
           </div>
 
@@ -387,7 +481,7 @@ const LoginPage: React.FC = () => {
                       type="text" 
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
-                      placeholder="Search..." 
+                      placeholder="Поиск..." 
                       className="w-full bg-[#0a0a0a] border border-white/5 rounded-lg py-2.5 pl-9 text-xs text-zinc-300 focus:border-purple-500/50 outline-none transition-all placeholder:text-zinc-700"
                   />
               </div>
@@ -407,7 +501,7 @@ const LoginPage: React.FC = () => {
                       <div className="flex items-center justify-center md:justify-start gap-3">
                           <div className="relative shrink-0">
                               <img src={s.avatarUrl} className="w-8 h-8 rounded-md bg-zinc-900 object-cover grayscale group-hover:grayscale-0 transition-all" />
-                              {s.loa && <div className="absolute -top-1 -right-1 bg-amber-600 w-2.5 h-2.5 rounded-full border-2 border-[#050505]"></div>}
+                              {s.loa && s.loa.active && <div className="absolute -top-1 -right-1 bg-amber-600 w-2.5 h-2.5 rounded-full border-2 border-[#050505]" title="В отпуске"></div>}
                           </div>
                           <div className="hidden md:block overflow-hidden">
                               <div className={`font-bold text-xs truncate ${selectedStaff?.id === s.id ? 'text-white' : 'text-zinc-400 group-hover:text-zinc-200'}`}>{s.displayName}</div>
@@ -424,7 +518,7 @@ const LoginPage: React.FC = () => {
                   className="w-full flex items-center justify-center md:justify-start gap-3 text-zinc-600 hover:text-red-400 transition-colors p-2"
               >
                   <LogOut className="w-4 h-4" />
-                  <span className="hidden md:inline text-xs font-bold uppercase">Terminate Session</span>
+                  <span className="hidden md:inline text-xs font-bold uppercase">Выйти</span>
               </button>
           </div>
       </div>
@@ -435,19 +529,74 @@ const LoginPage: React.FC = () => {
           <div className="h-20 border-b border-white/5 flex items-center justify-between px-8 bg-[#030303]/50 backdrop-blur-md sticky top-0 z-30">
               <div className="flex items-center gap-2 text-xs font-mono text-zinc-500">
                   <Terminal className="w-4 h-4" />
-                  <span>SYSTEM</span>
+                  <span>СИСТЕМА</span>
                   <span>/</span>
-                  <span className={selectedStaff ? 'text-purple-400' : ''}>{selectedStaff ? 'USER_MANAGEMENT' : 'IDLE'}</span>
+                  <span className={selectedStaff ? 'text-purple-400' : ''}>{selectedStaff ? 'УПРАВЛЕНИЕ_ПЕРСОНАЛОМ' : 'ОЖИДАНИЕ'}</span>
               </div>
               <div className="flex items-center gap-4">
+                  {isAdmin && (
+                    <button 
+                        onClick={() => { setViewTab('appeals'); fetchAppeals(); setSelectedStaff(null); }}
+                        className="flex items-center gap-2 text-[10px] text-zinc-300 bg-white/5 px-3 py-1.5 rounded-full hover:bg-white/10 transition-colors"
+                    >
+                        <Bell className="w-3 h-3 text-amber-500" />
+                        АПЕЛЛЯЦИИ
+                    </button>
+                  )}
                   <div className="flex items-center gap-2 text-[10px] text-zinc-600 bg-white/5 px-3 py-1.5 rounded-full">
                       <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse"></div>
-                      SERVER: ONLINE
+                      СЕРВЕР: ONLINE
                   </div>
               </div>
           </div>
 
-          {selectedStaff ? (
+          {viewTab === 'appeals' && isAdmin ? (
+             <div className="flex-1 overflow-y-auto p-6 md:p-10 custom-scrollbar">
+                <div className="max-w-4xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-500">
+                    <h2 className="text-2xl font-black mb-6 flex items-center gap-3">
+                        <FileText className="w-6 h-6 text-purple-500" />
+                        АКТИВНЫЕ АПЕЛЛЯЦИИ
+                    </h2>
+                    {appeals.length === 0 ? (
+                        <div className="p-12 text-center border border-white/5 rounded-3xl bg-[#0a0a0a]">
+                            <Check className="w-12 h-12 text-emerald-500 mx-auto mb-4" />
+                            <div className="text-zinc-500 font-bold">Нет активных объяснительных</div>
+                        </div>
+                    ) : (
+                        <div className="space-y-4">
+                            {appeals.map(app => (
+                                <div key={app.id} className="bg-[#0a0a0a] border border-white/10 rounded-2xl p-6 relative group hover:border-purple-500/30 transition-colors">
+                                    <div className="flex justify-between items-start mb-4">
+                                        <div>
+                                            <div className="text-lg font-bold text-white mb-1">{app.username}</div>
+                                            <div className="text-xs text-zinc-500 font-mono">ID: {app.userId}</div>
+                                        </div>
+                                        <div className="text-[10px] font-mono text-zinc-600">{new Date(app.date).toLocaleString()}</div>
+                                    </div>
+                                    <div className="bg-black/50 p-4 rounded-xl text-sm text-zinc-300 font-medium mb-6">
+                                        "{app.text}"
+                                    </div>
+                                    <div className="flex gap-3">
+                                        <button 
+                                            onClick={() => handleAppealResolve(app.id, 'approve')}
+                                            className="px-4 py-2 bg-emerald-900/20 border border-emerald-500/30 text-emerald-400 rounded-lg text-xs font-bold uppercase hover:bg-emerald-900/40 transition-colors flex items-center gap-2"
+                                        >
+                                            <Check className="w-4 h-4" /> Принять (Снять варн)
+                                        </button>
+                                        <button 
+                                            onClick={() => handleAppealResolve(app.id, 'reject')}
+                                            className="px-4 py-2 bg-red-900/20 border border-red-500/30 text-red-400 rounded-lg text-xs font-bold uppercase hover:bg-red-900/40 transition-colors flex items-center gap-2"
+                                        >
+                                            <X className="w-4 h-4" /> Отклонить
+                                        </button>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
+             </div>
+          ) : selectedStaff ? (
               <div className="flex-1 overflow-y-auto p-6 md:p-10 custom-scrollbar">
                   <div className="max-w-6xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-500">
                       
@@ -485,17 +634,17 @@ const LoginPage: React.FC = () => {
                                               
                                               {/* STATUS INDICATOR */}
                                               <div className={`px-3 py-1 rounded border text-[10px] font-bold uppercase flex items-center gap-2 ${
-                                                  selectedStaff.status === 'online' 
+                                                  selectedStaff.status === 'online' || selectedStaff.status === 'dnd' || selectedStaff.status === 'idle'
                                                   ? 'bg-emerald-900/20 border-emerald-500/50 text-emerald-400' 
                                                   : 'bg-zinc-900 border-zinc-700 text-zinc-500'
                                               }`}>
-                                                  <div className={`w-2 h-2 rounded-full ${selectedStaff.status === 'online' ? 'bg-emerald-500 animate-pulse' : 'bg-zinc-600'}`}></div>
-                                                  {selectedStaff.status === 'online' ? 'ONLINE' : 'OFFLINE'}
+                                                  <div className={`w-2 h-2 rounded-full ${selectedStaff.status === 'online' || selectedStaff.status === 'dnd' || selectedStaff.status === 'idle' ? 'bg-emerald-500 animate-pulse' : 'bg-zinc-600'}`}></div>
+                                                  {selectedStaff.status === 'offline' ? 'OFFLINE' : 'ONLINE'}
                                               </div>
 
-                                              {selectedStaff.loa && (
+                                              {selectedStaff.loa && selectedStaff.loa.active && (
                                                   <div className="px-3 py-1 rounded bg-amber-900/20 border border-amber-500/50 text-amber-500 text-[10px] font-bold uppercase flex items-center gap-2">
-                                                      <Coffee className="w-3 h-3" /> ON LEAVE
+                                                      <Coffee className="w-3 h-3" /> В ОТПУСКЕ
                                                   </div>
                                               )}
                                           </div>
@@ -506,13 +655,13 @@ const LoginPage: React.FC = () => {
                                               onClick={() => setViewTab('profile')}
                                               className={`px-6 py-3 rounded-xl text-xs font-bold uppercase tracking-wider transition-all border ${viewTab === 'profile' ? 'bg-white text-black border-white shadow-[0_0_20px_rgba(255,255,255,0.2)]' : 'bg-white/5 text-zinc-400 border-white/5 hover:bg-white/10'}`}
                                           >
-                                              Overview
+                                              Обзор
                                           </button>
                                           <button 
                                               onClick={() => { setViewTab('history'); fetchLogs(selectedStaff.id); }}
                                               className={`px-6 py-3 rounded-xl text-xs font-bold uppercase tracking-wider transition-all border ${viewTab === 'history' ? 'bg-white text-black border-white shadow-[0_0_20px_rgba(255,255,255,0.2)]' : 'bg-white/5 text-zinc-400 border-white/5 hover:bg-white/10'}`}
                                           >
-                                              Audit Logs
+                                              Логи
                                           </button>
                                       </div>
                                   </div>
@@ -531,30 +680,30 @@ const LoginPage: React.FC = () => {
                                               <div className="p-2 bg-purple-500/10 rounded-lg border border-purple-500/20">
                                                   <Zap className="w-5 h-5 text-purple-400" />
                                               </div>
-                                              <h3 className="text-lg font-bold uppercase tracking-tight">Administrative Actions</h3>
+                                              <h3 className="text-lg font-bold uppercase tracking-tight">Административные Действия</h3>
                                           </div>
 
                                           {!actionType ? (
                                               <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
                                                   <button onClick={() => setActionType('promote')} className="h-24 rounded-2xl bg-emerald-900/10 border border-emerald-500/20 hover:bg-emerald-500/20 hover:border-emerald-500/50 hover:scale-[1.02] transition-all flex flex-col items-center justify-center gap-2 group">
                                                       <ArrowUpCircle className="w-6 h-6 text-emerald-500 group-hover:text-white transition-colors" />
-                                                      <span className="text-[10px] font-black uppercase text-emerald-400 tracking-wider">Promote</span>
+                                                      <span className="text-[10px] font-black uppercase text-emerald-400 tracking-wider">Повысить</span>
                                                   </button>
                                                   <button onClick={() => setActionType('demote')} className="h-24 rounded-2xl bg-orange-900/10 border border-orange-500/20 hover:bg-orange-500/20 hover:border-orange-500/50 hover:scale-[1.02] transition-all flex flex-col items-center justify-center gap-2 group">
                                                       <ArrowDownCircle className="w-6 h-6 text-orange-500 group-hover:text-white transition-colors" />
-                                                      <span className="text-[10px] font-black uppercase text-orange-400 tracking-wider">Demote</span>
+                                                      <span className="text-[10px] font-black uppercase text-orange-400 tracking-wider">Понизить</span>
                                                   </button>
                                                   <button onClick={() => setActionType('warn')} className="h-24 rounded-2xl bg-yellow-900/10 border border-yellow-500/20 hover:bg-yellow-500/20 hover:border-yellow-500/50 hover:scale-[1.02] transition-all flex flex-col items-center justify-center gap-2 group">
                                                       <AlertTriangle className="w-6 h-6 text-yellow-500 group-hover:text-white transition-colors" />
-                                                      <span className="text-[10px] font-black uppercase text-yellow-400 tracking-wider">Warn</span>
+                                                      <span className="text-[10px] font-black uppercase text-yellow-400 tracking-wider">Варн</span>
                                                   </button>
                                                   <button onClick={() => setActionType('unwarn')} className="h-24 rounded-2xl bg-blue-900/10 border border-blue-500/20 hover:bg-blue-500/20 hover:border-blue-500/50 hover:scale-[1.02] transition-all flex flex-col items-center justify-center gap-2 group">
                                                       <ShieldCheck className="w-6 h-6 text-blue-500 group-hover:text-white transition-colors" />
-                                                      <span className="text-[10px] font-black uppercase text-blue-400 tracking-wider">Unwarn</span>
+                                                      <span className="text-[10px] font-black uppercase text-blue-400 tracking-wider">Снять Варн</span>
                                                   </button>
                                                   <button onClick={() => setActionType('kick')} className="h-24 rounded-2xl bg-red-900/10 border border-red-500/20 hover:bg-red-500/20 hover:border-red-500/50 hover:scale-[1.02] transition-all flex flex-col items-center justify-center gap-2 group">
                                                       <Trash2 className="w-6 h-6 text-red-500 group-hover:text-white transition-colors" />
-                                                      <span className="text-[10px] font-black uppercase text-red-400 tracking-wider">Kick</span>
+                                                      <span className="text-[10px] font-black uppercase text-red-400 tracking-wider">Кикнуть</span>
                                                   </button>
                                               </div>
                                           ) : (
@@ -562,42 +711,33 @@ const LoginPage: React.FC = () => {
                                                   <div className="flex items-center justify-between mb-6 border-b border-white/5 pb-4">
                                                       <div className="flex items-center gap-3">
                                                           <div className="w-2 h-2 bg-purple-500 rounded-full animate-pulse"></div>
-                                                          <span className="text-sm font-black uppercase tracking-wider text-white">Protocol: {actionType}</span>
+                                                          <span className="text-sm font-black uppercase tracking-wider text-white">Протокол: {actionType === 'promote' ? 'Повышение' : actionType === 'demote' ? 'Понижение' : actionType === 'warn' ? 'Предупреждение' : actionType}</span>
                                                       </div>
                                                       <button onClick={() => setActionType(null)} className="p-2 hover:bg-white/10 rounded-lg transition-colors"><X className="w-4 h-4 text-zinc-500" /></button>
                                                   </div>
                                                   
                                                   <div className="space-y-4">
                                                       {(actionType === 'promote' || actionType === 'demote') && (
-                                                          <div className="space-y-2">
-                                                              <label className="text-[10px] font-bold text-zinc-500 uppercase">Target Rank</label>
-                                                              <select 
-                                                                onChange={(e) => setTargetRoleId(e.target.value)}
-                                                                className="w-full bg-[#050505] border border-white/10 p-3 rounded-xl text-xs font-mono outline-none focus:border-purple-500 transition-colors appearance-none"
-                                                              >
-                                                                  <option value="">Select Classification...</option>
-                                                                  {Object.entries(ROLE_DEFINITIONS).map(([id, def]) => (
-                                                                      <option key={id} value={id}>{def.name}</option>
-                                                                  ))}
-                                                              </select>
+                                                          <div className="p-3 bg-white/5 border border-white/5 rounded-xl text-xs text-zinc-400 text-center">
+                                                              Действие будет применено автоматически согласно иерархии ролей.
                                                           </div>
                                                       )}
 
                                                       {actionType === 'warn' && (
                                                           <div className="space-y-2">
-                                                              <label className="text-[10px] font-bold text-zinc-500 uppercase">Severity Level</label>
+                                                              <label className="text-[10px] font-bold text-zinc-500 uppercase">Уровень Варна</label>
                                                               <div className="flex gap-2">
                                                                   {[1,2,3].map(n => (
-                                                                      <button key={n} onClick={() => setWarnCount(n)} className={`flex-1 py-3 rounded-xl font-black border transition-all ${warnCount === n ? 'bg-yellow-500 border-yellow-500 text-black' : 'bg-black border-white/10 text-zinc-500'}`}>Level {n}</button>
+                                                                      <button key={n} onClick={() => setWarnCount(n)} className={`flex-1 py-3 rounded-xl font-black border transition-all ${warnCount === n ? 'bg-yellow-500 border-yellow-500 text-black' : 'bg-black border-white/10 text-zinc-500'}`}>{n}</button>
                                                                   ))}
                                                               </div>
                                                           </div>
                                                       )}
 
                                                       <div className="space-y-2">
-                                                          <label className="text-[10px] font-bold text-zinc-500 uppercase">Reason for Action</label>
+                                                          <label className="text-[10px] font-bold text-zinc-500 uppercase">Причина</label>
                                                           <textarea 
-                                                            placeholder="Enter details..." 
+                                                            placeholder="Укажите подробности..." 
                                                             value={actionReason}
                                                             onChange={(e) => setActionReason(e.target.value)}
                                                             className="w-full bg-[#050505] border border-white/10 rounded-xl p-4 text-xs font-mono h-32 outline-none focus:border-purple-500 transition-colors resize-none"
@@ -609,7 +749,7 @@ const LoginPage: React.FC = () => {
                                                         disabled={isSending}
                                                         className="w-full py-4 bg-white text-black font-black uppercase rounded-xl hover:bg-zinc-200 transition-colors disabled:opacity-50 mt-2 text-xs tracking-widest shadow-[0_0_20px_rgba(255,255,255,0.1)]"
                                                       >
-                                                          {isSending ? 'PROCESSING...' : 'EXECUTE PROTOCOL'}
+                                                          {isSending ? 'ОБРАБОТКА...' : 'ПОДТВЕРДИТЬ'}
                                                       </button>
                                                   </div>
                                               </div>
@@ -618,21 +758,26 @@ const LoginPage: React.FC = () => {
                                   ) : (
                                       <div className="bg-[#0a0a0a] border border-white/5 rounded-3xl p-12 text-center">
                                           <Lock className="w-8 h-8 text-zinc-700 mx-auto mb-4" />
-                                          <div className="text-zinc-500 text-xs font-bold uppercase tracking-widest">Restricted Access</div>
+                                          <div className="text-zinc-500 text-xs font-bold uppercase tracking-widest">Доступ Запрещен</div>
                                       </div>
                                   )}
+
+                                  {/* CALENDAR VIEW */}
+                                  <CalendarView loa={selectedStaff.loa} />
                               </div>
+
+                              {/* RIGHT COL: INFO (Optional for future metrics) */}
                           </div>
                       ) : (
                           <div className="bg-[#0a0a0a] border border-white/5 rounded-3xl p-8 min-h-[500px]">
                               <div className="flex items-center gap-3 mb-8">
                                   <History className="w-5 h-5 text-purple-500" />
-                                  <h3 className="text-lg font-bold uppercase tracking-tight">Audit Log History</h3>
+                                  <h3 className="text-lg font-bold uppercase tracking-tight">История Действий</h3>
                               </div>
                               
                               <div className="relative border-l border-white/10 ml-3 space-y-8">
                                   {userLogs.length === 0 ? (
-                                      <div className="pl-8 text-zinc-600 text-xs font-mono">NO RECORDS FOUND</div>
+                                      <div className="pl-8 text-zinc-600 text-xs font-mono">НЕТ ЗАПИСЕЙ</div>
                                   ) : (
                                       userLogs.map((log, idx) => (
                                           <div key={idx} className="relative pl-8 group">
@@ -651,7 +796,7 @@ const LoginPage: React.FC = () => {
                                                   </div>
                                                   <p className="text-sm text-zinc-300 font-medium mb-2">{log.reason}</p>
                                                   <div className="text-[10px] text-zinc-500 uppercase font-bold">
-                                                      Admin ID: <span className="font-mono text-zinc-400">{log.adminId}</span>
+                                                      Админ ID: <span className="font-mono text-zinc-400">{log.adminId}</span>
                                                   </div>
                                               </div>
                                           </div>
@@ -670,8 +815,8 @@ const LoginPage: React.FC = () => {
                           <LayoutDashboard className="w-10 h-10 text-zinc-700" />
                       </div>
                       <div>
-                          <h2 className="text-2xl font-black text-white tracking-tight mb-2">AWAITING INPUT</h2>
-                          <p className="text-zinc-500 text-xs uppercase tracking-widest">Select a staff member from the directory</p>
+                          <h2 className="text-2xl font-black text-white tracking-tight mb-2">ОЖИДАНИЕ ВВОДА</h2>
+                          <p className="text-zinc-500 text-xs uppercase tracking-widest">Выберите сотрудника из списка слева</p>
                       </div>
                   </div>
               </div>
