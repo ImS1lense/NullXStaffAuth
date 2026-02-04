@@ -428,7 +428,7 @@ const LoginPage: React.FC = () => {
   );
 
   return (
-    <div className="min-h-screen w-full bg-[#050505] text-white overflow-hidden flex flex-col items-center justify-center relative selection:bg-purple-500/30 font-sans">
+    <div className="min-h-screen w-full bg-[#050505] text-white overflow-hidden flex flex-col items-center relative selection:bg-purple-500/30 font-sans">
       
       {/* BACKGROUND */}
       <div className="absolute inset-0 z-0 opacity-[0.07]" 
@@ -446,13 +446,13 @@ const LoginPage: React.FC = () => {
         <div className={`absolute bottom-[-10%] right-[20%] w-[600px] h-[600px] rounded-full blur-[100px] transition-colors duration-1000 ${accessDenied ? 'bg-orange-600/5' : 'bg-indigo-600/5'}`} />
       </div>
 
-      <div className={`relative z-10 w-full transition-all duration-700 ease-in-out ${user ? 'max-w-5xl' : 'max-w-[480px]'} p-4`}>
-        <div className={`relative backdrop-blur-2xl border transition-all duration-500 rounded-[2.5rem] flex flex-col items-center shadow-2xl overflow-hidden
+      <div className={`relative z-10 w-full transition-all duration-700 ease-in-out flex flex-col ${user ? 'h-screen max-w-full p-0' : 'max-w-[480px] p-4 items-center justify-center min-h-screen'}`}>
+        <div className={`relative backdrop-blur-2xl transition-all duration-500 flex flex-col shadow-2xl overflow-hidden
             ${accessDenied 
-                ? 'bg-[#0f0505]/95 border-red-500/20 shadow-red-900/10 p-10 md:p-14' 
+                ? 'bg-[#0f0505]/95 border border-red-500/20 shadow-red-900/10 p-10 md:p-14 rounded-[2.5rem] items-center' 
                 : user 
-                    ? 'bg-[#0a0a0a]/95 border-white/5 p-8 min-h-[600px]' 
-                    : 'bg-[#0a0a0a]/90 border-white/5 p-10 md:p-14'
+                    ? 'bg-[#0a0a0a] w-full h-full p-6 md:p-8' // Full screen, no rounding, no border
+                    : 'bg-[#0a0a0a]/90 border border-white/5 p-10 md:p-14 rounded-[2.5rem] items-center'
             }`}>
           
           {/* HEADER (Only show on Login) */}
@@ -534,8 +534,8 @@ const LoginPage: React.FC = () => {
                                                 }}
                                             />
                                         </div>
-                                        {/* Status Indicator */}
-                                        <div className={`absolute bottom-0 right-0 w-6 h-6 rounded-full border-4 border-[#0a0a0a] 
+                                        {/* Status Indicator (Moved outward) */}
+                                        <div className={`absolute -bottom-2 -right-2 w-8 h-8 rounded-full border-[5px] border-[#0a0a0a] 
                                             ${selectedStaff.status === 'online' ? 'bg-emerald-500 shadow-[0_0_15px_rgba(16,185,129,0.5)]' : 
                                               selectedStaff.status === 'idle' ? 'bg-yellow-500' : 
                                               selectedStaff.status === 'dnd' ? 'bg-red-500' : 'bg-zinc-500'}`}>
@@ -791,7 +791,7 @@ const LoginPage: React.FC = () => {
                             </div>
                         )}
 
-                        <div className="flex-1 overflow-y-auto max-h-[400px] pr-2 space-y-2">
+                        <div className="flex-1 overflow-y-auto pr-2 space-y-2">
                             {isStaffLoading ? (
                                  <div className="flex flex-col items-center justify-center py-12 gap-2 text-zinc-500">
                                     <RefreshCw className="w-6 h-6 animate-spin" />
