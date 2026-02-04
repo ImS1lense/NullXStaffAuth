@@ -12,7 +12,16 @@ const GUILD_ID = process.env.GUILD_ID || '1458138848822431770';
 const LOG_CHANNEL_ID = '1458163321302945946'; 
 const STAFF_ROLE_ID = '1458158245700046901'; 
 
-// === ВАЖНО: НАСТРОЙКА ДОСТУПА (CORS) ===
+// IDs ролей иерархии (для авто-снятия при повышении/понижении)
+const RANK_ROLE_IDS = [
+    "1459285694458626222", // Стажёр
+    "1458158059187732666", // Младший модератор
+    "1458158896894967879", // Модератор
+    "1458159110720589944", // Старший модератор
+    "1458159802105594061", // Шеф модератор
+    "1458277039399374991"  // Куратор
+];
+
 // === НАСТРОЙКА ДОСТУПА (CORS) ===
 app.use(cors({
     origin: function (origin, callback) {
@@ -88,6 +97,11 @@ async function logActionToDiscord(action, targetUser, adminUser, reason, details
 
 // === API: GET STAFF LIST ===
 app.get('/api/staff', async (req, res) => {
+    // Check if client is ready
+    if (!client.isReady()) {
+        return res.status(503).json({ error: "Бот запускается, попробуйте через 5 секунд..." });
+    }
+
     try {
         const guild = await client.guilds.fetch(GUILD_ID);
         if (!guild) return res.status(404).json({ error: 'Discord Server Error' });
@@ -139,11 +153,33 @@ app.post('/api/action', async (req, res) => {
 
             case 'promote':
             case 'demote':
+                if (!targetRoleId) return res.status(400).json({ error: 'Роль не указана' });
+                
+                // 1. Выдаем новую роль
+                await member.roles.add(targetRoleId, reason);
+
+                // 2. Снимаем все другие ранговые роли, чтобы не было дублей
+                const rolesToRemove = member.roles.cache.filter(role => 
+                    RANK_ROLE_IDS.includes(role.id) && role.id !== targetRoleId
+                );
+                
+                if (rolesToRemove.size > 0) {
+                    await member.roles.remove(rolesToRemove, "Обновление ранга (снятие старого)");
+                }
+
+                logDetails = `Новая роль: <@&${targetRoleId}> (старые сняты)`;
+                break;
+
             case 'hire':
                 if (!targetRoleId) return res.status(400).json({ error: 'Роль не указана' });
                 await member.roles.add(targetRoleId, reason);
-                // Тут можно добавить снятие предыдущей роли, если нужно
-                logDetails = `Выдана роль ID: ${targetRoleId}`;
+                
+                // При hire добавляем роль персонала (доступ к панели) если ее нет
+                if (STAFF_ROLE_ID && !member.roles.cache.has(STAFF_ROLE_ID)) {
+                     await member.roles.add(STAFF_ROLE_ID, "Выдача прав персонала");
+                }
+                
+                logDetails = `Принят на должность <@&${targetRoleId}>`;
                 break;
 
             case 'warn':
