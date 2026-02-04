@@ -1,39 +1,33 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-const { Client, GatewayIntentBits, Partials, EmbedBuilder } = require('discord.js');
+const { Client, GatewayIntentBits, Partials, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 
 const app = express();
-// Render выдает порт автоматически через process.env.PORT
 const PORT = process.env.PORT || 4000;
 
-// КОНФИГУРАЦИЯ
 const GUILD_ID = process.env.GUILD_ID || '1458138848822431770'; 
 const LOG_CHANNEL_ID = '1458163321302945946'; 
 const STAFF_ROLE_ID = '1458158245700046901'; 
 
-// IDs ролей иерархии (для авто-снятия при повышении/понижении)
 const RANK_ROLE_IDS = [
-    "1459285694458626222", // Стажёр
-    "1458158059187732666", // Младший модератор
-    "1458158896894967879", // Модератор
-    "1458159110720589944", // Старший модератор
-    "1458159802105594061", // Шеф модератор
-    "1458277039399374991"  // Куратор
+    "1459285694458626222", "1458158059187732666", "1458158896894967879",
+    "1458159110720589944", "1458159802105594061", "1458277039399374991"
 ];
 
-// === НАСТРОЙКА ДОСТУПА (CORS) ===
+// === MOCK DATABASE (IN-MEMORY) ===
+// В реальном проекте используйте MongoDB или PostgreSQL
+const MOCK_DB = {
+    logs: [], // { targetId, adminId, action, reason, date }
+    loa: {}   // { userId: { start: timestamp, end: timestamp, active: boolean } }
+};
+
 app.use(cors({
     origin: function (origin, callback) {
-        // Разрешаем запросы без origin (например, если тестировать через Postman)
         if (!origin) return callback(null, true);
-        
-        // Разрешаем ВСЕ поддомены vercel.app и локалку
         if (origin.includes('vercel.app') || origin.includes('localhost')) {
             return callback(null, true);
         }
-        
-        console.log("⛔ Блокировка CORS для:", origin);
         return callback(new Error('Not allowed by CORS'));
     },
     credentials: true
@@ -41,7 +35,6 @@ app.use(cors({
 
 app.use(express.json());
 
-// Инициализация Discord Клиента
 const client = new Client({
     intents: [
         GatewayIntentBits.Guilds,
@@ -52,164 +45,166 @@ const client = new Client({
     partials: [Partials.Channel, Partials.Message] 
 });
 
-// Логин бота
 if (!process.env.DISCORD_BOT_TOKEN) {
-    console.error("❌ ОШИБКА: Нет токена! Убедитесь, что он добавлен в Environment Variables на Render.");
+    console.error("❌ ОШИБКА: Нет токена!");
 } else {
-    client.login(process.env.DISCORD_BOT_TOKEN).catch(err => {
-        console.error("❌ ОШИБКА АВТОРИЗАЦИИ БОТА:", err.message);
-    });
+    client.login(process.env.DISCORD_BOT_TOKEN).catch(err => console.error("❌ Auth Error:", err.message));
 }
 
 client.once('ready', () => {
-    console.log(`✅ Бот вошел как ${client.user.tag}`);
-    console.log(`🚀 API доступно по адресу: https://nullx-backend.onrender.com`);
+    console.log(`✅ Bot ready: ${client.user.tag}`);
 });
 
-// === HELPER: LOGGING ===
 async function logActionToDiscord(action, targetUser, adminUser, reason, details = "") {
     try {
         const channel = await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
-        if (!channel) return console.log("Канал логов не найден");
+        if (!channel) return;
 
-        const colorMap = {
-            promote: 0x34D399, demote: 0xF97316, kick: 0xEF4444,
-            warn: 0xEAB308, unwarn: 0x6366F1, hire: 0x3B82F6
-        };
+        const colorMap = { promote: 0x34D399, demote: 0xF97316, kick: 0xEF4444, warn: 0xEAB308, unwarn: 0x6366F1, hire: 0x3B82F6, loa: 0x9333EA };
 
         const embed = new EmbedBuilder()
-            .setTitle(`ДЕЙСТВИЕ: ${action.toUpperCase()}`)
+            .setTitle(`ACTION: ${action.toUpperCase()}`)
             .setColor(colorMap[action] || 0x808080)
             .addFields(
-                { name: 'Администратор', value: `${adminUser ? `<@${adminUser.id}>` : 'Неизвестно'}`, inline: true },
-                { name: 'Пользователь', value: `${targetUser ? `<@${targetUser.id}>` : 'Неизвестно'}`, inline: true },
-                { name: 'Причина', value: reason || 'Не указана' },
-                { name: 'Детали', value: details || 'Нет' }
+                { name: 'Admin', value: `${adminUser ? `<@${adminUser.id}>` : 'System'}`, inline: true },
+                { name: 'Target', value: `${targetUser ? `<@${targetUser.id}>` : 'None'}`, inline: true },
+                { name: 'Reason', value: reason || 'N/A' },
+                { name: 'Details', value: details || 'None' }
             )
-            .setTimestamp()
-            .setFooter({ text: 'NULLX Admin Panel' });
+            .setTimestamp();
 
         await channel.send({ embeds: [embed] });
-    } catch (e) {
-        console.error("Log error:", e);
-    }
+    } catch (e) { console.error("Log error:", e); }
 }
 
-// === API: GET STAFF LIST ===
+// === API Routes ===
+
 app.get('/api/staff', async (req, res) => {
-    // Check if client is ready
-    if (!client.isReady()) {
-        return res.status(503).json({ error: "Бот запускается, попробуйте через 5 секунд..." });
-    }
+    if (!client.isReady()) return res.status(503).json({ error: "Bot starting..." });
 
     try {
         const guild = await client.guilds.fetch(GUILD_ID).catch(() => null);
-        if (!guild) return res.status(404).json({ error: 'Discord Server Error: Guild not found' });
+        if (!guild) return res.status(404).json({ error: 'Guild not found' });
 
-        // Важно: нужно включить SERVER MEMBERS INTENT в Developer Portal
-        try {
-            await guild.members.fetch(); 
-        } catch (e) {
-            console.error("Ошибка получения участников. Проверьте Intents в Dev Portal:", e.message);
-            // Пытаемся продолжить с кэшем, если fetch упал
-        }
+        try { await guild.members.fetch(); } catch (e) {}
 
-        const staffMembers = guild.members.cache.filter(member => 
-            member.roles.cache.has(STAFF_ROLE_ID)
-        );
+        const staffMembers = guild.members.cache.filter(member => member.roles.cache.has(STAFF_ROLE_ID));
 
         const result = staffMembers.map(m => ({
             id: m.id,
             username: m.user.username,
-            displayName: m.displayName, // Никнейм на сервере (обычно это ник в Minecraft)
-            global_name: m.user.globalName,
+            displayName: m.displayName,
             avatar: m.user.avatar,
             roles: m.roles.cache.map(r => r.id),
-            status: m.presence ? m.presence.status : 'offline'
+            status: m.presence ? m.presence.status : 'offline',
+            loa: MOCK_DB.loa[m.id]?.active || false // Добавляем статус LOA
         }));
 
         res.json(result);
     } catch (error) {
-        console.error("Staff fetch error:", error);
-        res.status(500).json({ error: "Ошибка получения списка: " + error.message });
+        res.status(500).json({ error: error.message });
     }
 });
 
-// === API: ACTIONS ===
+// Получить логи конкретного юзера
+app.get('/api/logs/:userId', (req, res) => {
+    const userId = req.params.userId;
+    const userLogs = MOCK_DB.logs.filter(l => l.targetId === userId).reverse();
+    res.json(userLogs);
+});
+
+// Установить LOA (Неактив)
+app.post('/api/loa', async (req, res) => {
+    const { userId, active, duration } = req.body;
+    
+    MOCK_DB.loa[userId] = {
+        active: active,
+        start: Date.now(),
+        end: duration ? Date.now() + (duration * 24 * 60 * 60 * 1000) : null
+    };
+
+    try {
+        const user = await client.users.fetch(userId);
+        logActionToDiscord('loa', user, user, active ? `Ushol v neaktiv (${duration || '?'} days)` : "Vernulsya iz neaktiva", active ? "LOA Active" : "LOA Ended");
+    } catch(e) {}
+
+    res.json({ success: true, active });
+});
+
 app.post('/api/action', async (req, res) => {
     const { action, targetId, targetRoleId, reason, warnCount, adminId } = req.body;
-    
-    // Лог в консоль Render для отладки
-    console.log(`[API REQUEST] Action: ${action} | User: ${targetId}`);
+    console.log(`[Action] ${action} -> ${targetId}`);
 
     try {
         const guild = await client.guilds.fetch(GUILD_ID);
         const member = await guild.members.fetch({ user: targetId, force: true }).catch(() => null);
-        
-        if (!member) return res.status(404).json({ error: 'Пользователь не найден в Discord' });
+        if (!member) return res.status(404).json({ error: 'Member not found' });
 
         let logDetails = "";
 
-        // ЛОГИКА ДЕЙСТВИЙ
+        // Записываем в "БД"
+        MOCK_DB.logs.push({
+            targetId,
+            adminId,
+            action,
+            reason,
+            date: new Date().toISOString()
+        });
+
         switch (action) {
             case 'kick':
-                if (!member.kickable) return res.status(403).json({ error: 'Нет прав кикнуть этого пользователя (его роль выше роли бота)' });
+                if (!member.kickable) return res.status(403).json({ error: 'Not kickable' });
                 await member.kick(reason);
-                logDetails = "Пользователь изгнан";
+                logDetails = "Kicked";
                 break;
 
             case 'promote':
             case 'demote':
-                if (!targetRoleId) return res.status(400).json({ error: 'Роль не указана' });
-                
-                // 1. Снимаем все другие ранговые роли, кроме новой
+                if (!targetRoleId) return res.status(400).json({ error: 'No role specified' });
                 const rolesToRemove = member.roles.cache
                     .filter(role => RANK_ROLE_IDS.includes(role.id) && role.id !== targetRoleId)
-                    .map(role => role.id); // Получаем массив ID для надежности
-
-                if (rolesToRemove.length > 0) {
-                    await member.roles.remove(rolesToRemove, "Обновление ранга (снятие старого)");
-                }
-
-                // 2. Выдаем новую роль
-                // Проверяем, есть ли уже эта роль, чтобы не спамить API, но add идемпотентен
+                    .map(role => role.id);
+                if (rolesToRemove.length > 0) await member.roles.remove(rolesToRemove);
                 await member.roles.add(targetRoleId, reason);
-
-                logDetails = `Новая роль: <@&${targetRoleId}>`;
+                logDetails = `Role changed to <@&${targetRoleId}>`;
                 break;
 
             case 'hire':
-                if (!targetRoleId) return res.status(400).json({ error: 'Роль не указана' });
+                if (!targetRoleId) return res.status(400).json({ error: 'No role specified' });
                 await member.roles.add(targetRoleId, reason);
-                
-                // При hire добавляем роль персонала (доступ к панели) если ее нет
-                if (STAFF_ROLE_ID && !member.roles.cache.has(STAFF_ROLE_ID)) {
-                     await member.roles.add(STAFF_ROLE_ID, "Выдача прав персонала");
-                }
-                
-                logDetails = `Принят на должность <@&${targetRoleId}>`;
+                if (STAFF_ROLE_ID && !member.roles.cache.has(STAFF_ROLE_ID)) await member.roles.add(STAFF_ROLE_ID);
+                logDetails = `Hired as <@&${targetRoleId}>`;
                 break;
 
             case 'warn':
-                logDetails = `Варн ${warnCount}/3`;
+                logDetails = `Warn ${warnCount}/3`;
+                // Отправка DM с кнопкой
                 try {
-                    await member.send(`⚠️ **Вам выдано предупреждение!**\nПричина: ${reason}\nВсего: ${warnCount}/3`);
-                } catch(e) {}
+                    const row = new ActionRowBuilder()
+                        .addComponents(
+                            new ButtonBuilder()
+                                .setCustomId('write_excuse')
+                                .setLabel('Написать объяснительную')
+                                .setStyle(ButtonStyle.Secondary)
+                                .setEmoji('📝')
+                        );
+                    
+                    await member.send({ 
+                        content: `⚠️ **ВЫ ПОЛУЧИЛИ ПРЕДУПРЕЖДЕНИЕ**\n\n**Причина:** ${reason}\n**Администратор:** <@${adminId}>\n**Счетчик:** ${warnCount}/3\n\nЕсли вы не согласны, нажмите кнопку ниже.`,
+                        components: [row]
+                    });
+                } catch(e) { logDetails += " (DM Failed)"; }
                 break;
                 
             case 'unwarn':
-                logDetails = `Варн снят`;
-                try {
-                    await member.send(`✅ **Предупреждение снято!**\nПричина: ${reason}`);
-                } catch(e) {}
+                logDetails = `Unwarned`;
+                try { await member.send(`✅ **Варн снят!**\nПричина: ${reason}`); } catch(e) {}
                 break;
             
             default: return res.status(400).json({ error: 'Unknown action' });
         }
 
-        // Отправляем лог в канал
         logActionToDiscord(action, member.user, { id: adminId }, reason, logDetails);
-
         res.json({ success: true });
 
     } catch (error) {
@@ -218,7 +213,4 @@ app.post('/api/action', async (req, res) => {
     }
 });
 
-// Запуск сервера
-app.listen(PORT, () => {
-    console.log(`✅ Сервер запущен на порту ${PORT}`);
-});
+app.listen(PORT, () => console.log(`✅ Server running on ${PORT}`));
