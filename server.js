@@ -24,7 +24,8 @@ const RANK_ROLE_IDS = [
 const MOCK_DB = {
     logs: [], // { id, targetId, adminId, action, reason, date }
     loa: {},   // { userId: { start: timestamp, end: timestamp, active: boolean, reason: string } }
-    appeals: [] // { id, userId, warnId (optional), text, status: 'pending'|'approved'|'rejected', date }
+    appeals: [], // { id, userId, warnId (optional), text, status: 'pending'|'approved'|'rejected', date }
+    minecraftNicks: {} // { userId: "Nickname" }
 };
 
 app.use(cors({
@@ -162,13 +163,27 @@ app.get('/api/staff', async (req, res) => {
             avatar: m.user.avatar,
             roles: m.roles.cache.map(r => r.id),
             status: m.presence ? m.presence.status : 'offline',
-            loa: MOCK_DB.loa[m.id] || null
+            loa: MOCK_DB.loa[m.id] || null,
+            minecraftNick: MOCK_DB.minecraftNicks[m.id] || null // Send MC Nick
         }));
 
         res.json(result);
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
+});
+
+app.post('/api/set-nickname', (req, res) => {
+    const { targetId, nickname } = req.body;
+    if (!targetId) return res.status(400).json({ error: "Target ID required" });
+
+    if (nickname && nickname.trim() !== "") {
+        MOCK_DB.minecraftNicks[targetId] = nickname;
+    } else {
+        delete MOCK_DB.minecraftNicks[targetId];
+    }
+    
+    res.json({ success: true, nickname: MOCK_DB.minecraftNicks[targetId] });
 });
 
 app.get('/api/logs/:userId', (req, res) => {
@@ -205,9 +220,8 @@ app.post('/api/appeals/resolve', async (req, res) => {
         const user = await client.users.fetch(appeal.userId);
         if (action === 'approve') {
             await user.send(`✅ **Ваша апелляция принята!**\nВарн будет снят.`);
-            // Automatically log an Unwarn action here if needed, or rely on admin to do it. 
-            // For better UX, let's just log it as Unwarn system action.
              MOCK_DB.logs.push({
+                id: Date.now().toString(),
                 targetId: appeal.userId,
                 adminId: adminId,
                 action: 'unwarn',
@@ -286,7 +300,6 @@ app.post('/api/action', async (req, res) => {
             const newRoleId = RANK_ROLE_IDS[newRankIndex];
             
             // Apply changes
-            // Remove all other rank roles to be clean
             const rolesToRemove = member.roles.cache
                 .filter(role => RANK_ROLE_IDS.includes(role.id) && role.id !== newRoleId)
                 .map(role => role.id);

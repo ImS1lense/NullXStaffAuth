@@ -5,7 +5,7 @@ import {
     RefreshCw, ChevronLeft, ArrowUpCircle, 
     ArrowDownCircle, UserPlus, Trash2, Check, AlertTriangle, Eye,
     Send, X, Loader2, AlertCircle, History, User, Coffee, Sparkles, Volume2,
-    LayoutDashboard, Terminal, Activity, Zap, Shield, Calendar, FileText, Bell
+    LayoutDashboard, Terminal, Activity, Zap, Shield, Calendar, FileText, Bell, PenSquare, Gamepad2
 } from 'lucide-react';
 
 // ==========================================
@@ -84,6 +84,7 @@ interface StaffDisplay {
     status: string;
     weight: number;
     loa: { active: boolean, start: number, end: number, reason: string } | null;
+    minecraftNick: string | null;
 }
 
 const ParticleBackground = () => {
@@ -175,6 +176,10 @@ const LoginPage: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [lastLogCount, setLastLogCount] = useState(0);
 
+  // Nickname Edit State
+  const [showNickModal, setShowNickModal] = useState(false);
+  const [newNick, setNewNick] = useState('');
+
   // LOA Modal State
   const [showLoaModal, setShowLoaModal] = useState(false);
   const [loaDuration, setLoaDuration] = useState(7);
@@ -257,7 +262,8 @@ const LoginPage: React.FC = () => {
                  status: m.status,
                  isCurrentUser: m.id === myId,
                  loa: m.loa ? { ...m.loa, active: m.loa.active } : null,
-                 weight: bestRole.weight
+                 weight: bestRole.weight,
+                 minecraftNick: m.minecraftNick
              };
           }).sort((a: any, b: any) => b.weight - a.weight);
           setStaffList(formatted);
@@ -330,6 +336,24 @@ const LoginPage: React.FC = () => {
       } catch(e) {}
   };
 
+  const handleSaveNick = async () => {
+      if (!selectedStaff) return;
+      try {
+          await fetch(`${API_URL}/set-nickname`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ targetId: selectedStaff.id, nickname: newNick })
+          });
+          
+          setSuccessMsg('IGN ОБНОВЛЕН');
+          setShowNickModal(false);
+          // Update local state immediately
+          setSelectedStaff(prev => prev ? { ...prev, minecraftNick: newNick || null } : null);
+          setStaffList(prev => prev.map(s => s.id === selectedStaff.id ? { ...s, minecraftNick: newNick || null } : s));
+          setTimeout(() => setSuccessMsg(''), 2000);
+      } catch(e) {}
+  };
+
   const handleLoaClick = () => {
       const me = staffList.find(s => s.isCurrentUser);
       if (me?.loa && me.loa.active) {
@@ -395,6 +419,31 @@ const LoginPage: React.FC = () => {
               <div className="bg-emerald-950/80 border border-emerald-500/30 text-emerald-300 px-6 py-3 rounded-lg font-mono text-xs shadow-[0_0_20px_rgba(16,185,129,0.2)] backdrop-blur-md flex items-center gap-3">
                   <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></div>
                   {successMsg}
+              </div>
+          </div>
+      )}
+
+      {/* NICKNAME MODAL */}
+      {showNickModal && selectedStaff && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+              <div className="bg-[#0a0a0a] border border-white/10 rounded-2xl w-full max-w-sm p-6 relative animate-in zoom-in-95 duration-200">
+                  <button onClick={() => setShowNickModal(false)} className="absolute top-4 right-4 text-zinc-500 hover:text-white"><X className="w-5 h-5"/></button>
+                  <h3 className="text-lg font-bold uppercase tracking-tight mb-4">Установить IGN (Minecraft)</h3>
+                  <div className="space-y-4">
+                      <input 
+                        type="text" 
+                        value={newNick}
+                        onChange={(e) => setNewNick(e.target.value)}
+                        placeholder="Введите никнейм..."
+                        className="w-full bg-black border border-white/10 p-3 rounded-xl text-sm outline-none focus:border-purple-500 transition-colors"
+                      />
+                      <button 
+                        onClick={handleSaveNick}
+                        className="w-full py-3 bg-white text-black font-black uppercase rounded-xl hover:bg-zinc-200 transition-colors text-xs tracking-widest"
+                      >
+                          Сохранить
+                      </button>
+                  </div>
               </div>
           </div>
       )}
@@ -606,10 +655,10 @@ const LoginPage: React.FC = () => {
                           
                           <div className="flex flex-col md:flex-row items-start gap-8 relative z-10">
                               {/* AVATAR BOX */}
-                              <div className="shrink-0 relative">
+                              <div className="shrink-0 relative group/avatar">
                                   <div className="w-40 h-40 rounded-2xl bg-zinc-900 border border-white/10 overflow-hidden relative shadow-2xl">
                                       <img 
-                                          src={`https://minotar.net/armor/bust/${selectedStaff.displayName}/300.png`}
+                                          src={`https://minotar.net/armor/bust/${selectedStaff.minecraftNick || selectedStaff.displayName}/300.png`}
                                           className="w-full h-full object-cover"
                                           style={{ imageRendering: 'pixelated' }}
                                           onError={(e) => { (e.target as HTMLImageElement).src = `https://minotar.net/helm/MHF_Steve/300.png`; }}
@@ -623,7 +672,16 @@ const LoginPage: React.FC = () => {
                               <div className="flex-1 w-full pt-2">
                                   <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-4">
                                       <div>
-                                          <h1 className="text-4xl font-black text-white tracking-tighter uppercase mb-2">{selectedStaff.displayName}</h1>
+                                          <div className="flex items-center gap-3 mb-2">
+                                            <h1 className="text-4xl font-black text-white tracking-tighter uppercase">{selectedStaff.displayName}</h1>
+                                            {selectedStaff.minecraftNick && (
+                                                <div className="flex items-center gap-1 bg-zinc-800 px-2 py-1 rounded text-[10px] text-zinc-400 font-mono" title="Minecraft Nickname">
+                                                    <Gamepad2 className="w-3 h-3" />
+                                                    {selectedStaff.minecraftNick}
+                                                </div>
+                                            )}
+                                          </div>
+                                          
                                           <div className="flex flex-wrap items-center gap-3">
                                               <div className={`px-3 py-1 rounded text-[10px] font-black uppercase tracking-widest border ${selectedStaff.roleBg} ${selectedStaff.roleColor}`}>
                                                   {selectedStaff.roleName}
@@ -646,6 +704,15 @@ const LoginPage: React.FC = () => {
                                                   <div className="px-3 py-1 rounded bg-amber-900/20 border border-amber-500/50 text-amber-500 text-[10px] font-bold uppercase flex items-center gap-2">
                                                       <Coffee className="w-3 h-3" /> В ОТПУСКЕ
                                                   </div>
+                                              )}
+                                              
+                                              {isAdmin && (
+                                                  <button 
+                                                    onClick={() => { setNewNick(selectedStaff.minecraftNick || ''); setShowNickModal(true); }}
+                                                    className="px-2 py-1 bg-zinc-800 hover:bg-zinc-700 rounded text-zinc-400 hover:text-white transition-colors flex items-center gap-1 text-[10px] font-bold"
+                                                  >
+                                                      <PenSquare className="w-3 h-3" /> IGN
+                                                  </button>
                                               )}
                                           </div>
                                       </div>
