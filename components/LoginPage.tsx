@@ -920,67 +920,77 @@ const LoginPage: React.FC = () => {
                                   <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-4">
                                       <div>
                                           <div className="flex items-center gap-3 mb-2">
-                                            <h1 className="text-4xl font-black text-white tracking-tighter uppercase drop-shadow-lg">{selectedStaff.displayName}</h1>
-                                            {selectedStaff.minecraftNick && (
-                                                <div className="flex items-center gap-1 bg-zinc-800 px-2 py-1 rounded text-[10px] text-zinc-400 font-mono" title="Minecraft Nickname">
-                                                    <Gamepad2 className="w-3 h-3" />
-                                                    {selectedStaff.minecraftNick}
-                                                </div>
-                                            )}
+                                            {/* RED ARROW SPOT: MINECRAFT NICK (or DisplayName fallback) */}
+                                            <h1 className="text-4xl font-black text-white tracking-tighter uppercase drop-shadow-lg">
+                                                {selectedStaff.minecraftNick || selectedStaff.displayName}
+                                            </h1>
+                                            
+                                            {/* BLUE ARROW SPOT: DISCORD USERNAME */}
+                                            <div className="flex items-center gap-1 bg-zinc-800 px-2 py-1 rounded text-[10px] text-zinc-400 font-mono" title="Discord Username">
+                                                <DiscordIcon className="w-3 h-3" />
+                                                {selectedStaff.username}
+                                            </div>
                                           </div>
                                           
-                                          <div className="flex flex-wrap items-center gap-3">
-                                              <div className={`px-3 py-1 rounded text-[10px] font-black uppercase tracking-widest border ${selectedStaff.roleBg} ${selectedStaff.roleColor} shadow-lg backdrop-blur-sm`}>
-                                                  {selectedStaff.roleName}
-                                              </div>
-                                              <div className="px-3 py-1 rounded bg-zinc-900/80 border border-zinc-800 text-zinc-500 text-[10px] font-mono backdrop-blur-sm">
-                                                  ID: {selectedStaff.id}
-                                              </div>
-                                              
-                                              {/* STATUS INDICATOR */}
-                                              <div className={`px-3 py-1 rounded border text-[10px] font-bold uppercase flex items-center gap-2 backdrop-blur-sm ${
-                                                  selectedStaff.status === 'online' || selectedStaff.status === 'dnd' || selectedStaff.status === 'idle'
-                                                  ? 'bg-emerald-900/20 border-emerald-500/50 text-emerald-400' 
-                                                  : 'bg-zinc-900/80 border-zinc-700 text-zinc-500'
-                                              }`}>
-                                                  <div className={`w-2 h-2 rounded-full ${selectedStaff.status === 'online' || selectedStaff.status === 'dnd' || selectedStaff.status === 'idle' ? 'bg-emerald-500 animate-pulse' : 'bg-zinc-600'}`}></div>
-                                                  {selectedStaff.status === 'offline' ? 'OFFLINE' : 'ONLINE'}
-                                              </div>
-
-                                              {selectedStaff.loa && selectedStaff.loa.active && (
-                                                  <div className="px-3 py-1 rounded bg-amber-900/20 border border-amber-500/50 text-amber-500 text-[10px] font-bold uppercase flex items-center gap-2 backdrop-blur-sm">
-                                                      <Coffee className="w-3 h-3" /> В ОТПУСКЕ
+                                          <div className="flex flex-col gap-2">
+                                              {/* ROW 1: ROLE | STATUS | LOA | SET BANNER */}
+                                              <div className="flex flex-wrap items-center gap-3">
+                                                  <div className={`px-3 py-1 rounded text-[10px] font-black uppercase tracking-widest border ${selectedStaff.roleBg} ${selectedStaff.roleColor} shadow-lg backdrop-blur-sm`}>
+                                                      {selectedStaff.roleName}
                                                   </div>
-                                              )}
-                                              
-                                              {isAdmin && (
-                                                  <button 
-                                                    onClick={() => { setNewNick(selectedStaff.minecraftNick || ''); setShowNickModal(true); }}
-                                                    className="px-2 py-1 bg-zinc-800/80 hover:bg-zinc-700 rounded text-zinc-400 hover:text-white transition-colors flex items-center gap-1 text-[10px] font-bold backdrop-blur-sm"
-                                                  >
-                                                      <PenSquare className="w-3 h-3" /> IGN
-                                                  </button>
-                                              )}
+                                                  
+                                                  {/* STATUS INDICATOR */}
+                                                  <div className={`px-3 py-1 rounded border text-[10px] font-bold uppercase flex items-center gap-2 backdrop-blur-sm ${
+                                                      selectedStaff.status === 'online' || selectedStaff.status === 'dnd' || selectedStaff.status === 'idle'
+                                                      ? 'bg-emerald-900/20 border-emerald-500/50 text-emerald-400' 
+                                                      : 'bg-zinc-900/80 border-zinc-700 text-zinc-500'
+                                                  }`}>
+                                                      <div className={`w-2 h-2 rounded-full ${selectedStaff.status === 'online' || selectedStaff.status === 'dnd' || selectedStaff.status === 'idle' ? 'bg-emerald-500 animate-pulse' : 'bg-zinc-600'}`}></div>
+                                                      {selectedStaff.status === 'offline' ? 'OFFLINE' : 'ONLINE'}
+                                                  </div>
 
-                                              {/* BANNER BUTTONS */}
-                                              {selectedStaff.isCurrentUser && (
-                                                  <button 
-                                                    onClick={() => { setNewBannerUrl(selectedStaff.bannerUrl || ''); setShowBannerModal(true); }}
-                                                    className="px-2 py-1 bg-purple-900/40 hover:bg-purple-900/60 border border-purple-500/30 rounded text-purple-300 transition-colors flex items-center gap-1 text-[10px] font-bold backdrop-blur-sm"
-                                                  >
-                                                      <Image className="w-3 h-3" /> ФОН
-                                                  </button>
-                                              )}
-                                              
-                                              {isAdmin && selectedStaff.bannerUrl && (
-                                                  <button 
-                                                    onClick={handleDeleteBanner}
-                                                    className="px-2 py-1 bg-red-900/40 hover:bg-red-900/60 border border-red-500/30 rounded text-red-300 transition-colors flex items-center gap-1 text-[10px] font-bold backdrop-blur-sm"
-                                                    title="Удалить баннер"
-                                                  >
-                                                      <Trash2 className="w-3 h-3" />
-                                                  </button>
-                                              )}
+                                                  {selectedStaff.loa && selectedStaff.loa.active && (
+                                                      <div className="px-3 py-1 rounded bg-amber-900/20 border border-amber-500/50 text-amber-500 text-[10px] font-bold uppercase flex items-center gap-2 backdrop-blur-sm">
+                                                          <Coffee className="w-3 h-3" /> В ОТПУСКЕ
+                                                      </div>
+                                                  )}
+
+                                                  {/* SET BANNER (User only) */}
+                                                  {selectedStaff.isCurrentUser && (
+                                                      <button 
+                                                        onClick={() => { setNewBannerUrl(selectedStaff.bannerUrl || ''); setShowBannerModal(true); }}
+                                                        className="px-2 py-1 bg-purple-900/40 hover:bg-purple-900/60 border border-purple-500/30 rounded text-purple-300 transition-colors flex items-center gap-1 text-[10px] font-bold backdrop-blur-sm"
+                                                      >
+                                                          <Image className="w-3 h-3" /> ФОН
+                                                      </button>
+                                                  )}
+                                              </div>
+
+                                              {/* ROW 2: ID | EDIT IGN | DELETE BANNER */}
+                                              <div className="flex flex-wrap items-center gap-3">
+                                                  <div className="px-3 py-1 rounded bg-zinc-900/80 border border-zinc-800 text-zinc-500 text-[10px] font-mono backdrop-blur-sm">
+                                                      ID: {selectedStaff.id}
+                                                  </div>
+                                                  
+                                                  {isAdmin && (
+                                                      <button 
+                                                        onClick={() => { setNewNick(selectedStaff.minecraftNick || ''); setShowNickModal(true); }}
+                                                        className="px-2 py-1 bg-zinc-800/80 hover:bg-zinc-700 rounded text-zinc-400 hover:text-white transition-colors flex items-center gap-1 text-[10px] font-bold backdrop-blur-sm"
+                                                      >
+                                                          <PenSquare className="w-3 h-3" /> IGN
+                                                      </button>
+                                                  )}
+
+                                                  {isAdmin && selectedStaff.bannerUrl && (
+                                                      <button 
+                                                        onClick={handleDeleteBanner}
+                                                        className="px-2 py-1 bg-red-900/40 hover:bg-red-900/60 border border-red-500/30 rounded text-red-300 transition-colors flex items-center gap-1 text-[10px] font-bold backdrop-blur-sm"
+                                                        title="Удалить баннер"
+                                                      >
+                                                          <Trash2 className="w-3 h-3" />
+                                                      </button>
+                                                  )}
+                                              </div>
                                           </div>
                                       </div>
                                       
