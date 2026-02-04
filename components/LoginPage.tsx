@@ -554,6 +554,11 @@ const LoginPage: React.FC = () => {
                           </div>
                           <div className="hidden md:block overflow-hidden">
                               <div className={`font-bold text-xs truncate ${selectedStaff?.id === s.id ? 'text-white' : 'text-zinc-400 group-hover:text-zinc-200'}`}>{s.displayName}</div>
+                              {s.minecraftNick && (
+                                  <div className={`text-[8px] font-mono flex items-center gap-1 mb-0.5 ${selectedStaff?.id === s.id ? 'text-zinc-400' : 'text-zinc-600'}`}>
+                                      <Gamepad2 className="w-2 h-2" /> {s.minecraftNick}
+                                  </div>
+                              )}
                               <div className={`text-[9px] uppercase font-bold tracking-wider mt-0.5 ${s.roleColor}`}>{s.roleName}</div>
                           </div>
                       </div>
