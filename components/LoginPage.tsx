@@ -5,7 +5,7 @@ import {
     RefreshCw, ChevronLeft, ArrowUpCircle, 
     ArrowDownCircle, UserPlus, Trash2, Check, AlertTriangle, Eye,
     Send, X, Loader2, AlertCircle, History, User, Coffee, Sparkles, Volume2,
-    LayoutDashboard, Terminal, Activity, Zap, Shield, Calendar, FileText, Bell, PenSquare, Gamepad2, ShieldAlert, Image, Plane
+    LayoutDashboard, Terminal, Activity, Zap, Shield, Calendar, FileText, Bell, PenSquare, Gamepad2, ShieldAlert, Image, Plane, Info
 } from 'lucide-react';
 
 // ==========================================
@@ -15,6 +15,7 @@ const DISCORD_CLIENT_ID = '1468331655646417203';
 const TARGET_GUILD_ID = '1458138848822431770'; 
 const STAFF_ROLE_ID = '1458158245700046901';
 const CURATOR_ROLE_ID = '1458277039399374991';
+const TWO_FA_EXPIRY_KEY = 'two_fa_expiry';
 
 const ALLOWED_ADMIN_IDS = [
     '802105175720460318', '440704669178789888', '591281053503848469',
@@ -25,8 +26,6 @@ const PROD_API_URL = 'https://nullx-backend.onrender.com/api';
 const API_URL = (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'))
     ? 'http://localhost:4000/api'
     : PROD_API_URL;
-
-const TWO_FA_EXPIRY_KEY = 'nullx_2fa_expiry';
 
 const playSound = (type: 'hover' | 'click') => {
     try {
@@ -90,6 +89,14 @@ interface StaffDisplay {
     minecraftNick: string | null;
     bannerUrl: string | null;
     warnCount: number;
+}
+
+// Toast System Types
+interface Toast {
+    id: number;
+    title: string;
+    message: string;
+    type: 'success' | 'info' | 'error' | 'warning';
 }
 
 const ParticleBackground = () => {
@@ -167,26 +174,30 @@ const CalendarView = ({ loa }: { loa: StaffDisplay['loa'] }) => {
 
 const LoginPage: React.FC = () => {
   // Auth State
-  const [authStep, setAuthStep] = useState<'login' | '2fa' | 'dashboard'>('login');
-  const [tempUser, setTempUser] = useState<any>(null); // Stores user data before 2FA verify
-  const [twoFactorCode, setTwoFactorCode] = useState('');
-  const [twoFactorError, setTwoFactorError] = useState('');
-
+  const [authStep, setAuthStep] = useState<'login' | 'dashboard'>('login');
   const [user, setUser] = useState<any>(null); // Authenticated user
+  
   const [staffList, setStaffList] = useState<StaffDisplay[]>([]);
   const [selectedStaff, setSelectedStaff] = useState<StaffDisplay | null>(null);
   const [loading, setLoading] = useState(false);
   const [viewTab, setViewTab] = useState<'profile' | 'history' | 'appeals' | 'loa_requests'>('profile');
   const [actionType, setActionType] = useState<string | null>(null);
   const [isSending, setIsSending] = useState(false);
-  const [successMsg, setSuccessMsg] = useState('');
+  
+  // Toast State
+  const [toasts, setToasts] = useState<Toast[]>([]);
+
   const [userLogs, setUserLogs] = useState<any[]>([]);
   const [appeals, setAppeals] = useState<any[]>([]);
   const [loaRequests, setLoaRequests] = useState<any[]>([]);
   const [actionReason, setActionReason] = useState('');
   const [warnCount, setWarnCount] = useState(1);
   const [searchQuery, setSearchQuery] = useState('');
+  
+  // Polling tracking
   const [lastLogCount, setLastLogCount] = useState(0);
+  const [lastAppealCount, setLastAppealCount] = useState(0);
+  const [lastLoaRequestCount, setLastLoaRequestCount] = useState(0);
 
   // Nickname Edit State
   const [showNickModal, setShowNickModal] = useState(false);
@@ -204,20 +215,28 @@ const LoginPage: React.FC = () => {
   const isAdmin = user && ALLOWED_ADMIN_IDS.includes(user.id);
   const isCurator = staffList.find(s => s.isCurrentUser)?.roleId === CURATOR_ROLE_ID;
 
+  // TOAST HELPER
+  const addToast = (title: string, message: string, type: Toast['type'] = 'info') => {
+      const id = Date.now();
+      setToasts(prev => [...prev, { id, title, message, type }]);
+      setTimeout(() => {
+          setToasts(prev => prev.filter(t => t.id !== id));
+      }, 5000);
+      
+      // Play sound based on type
+      if (type === 'success') playSound('click');
+      if (type === 'error') playSound('click'); // could use different sound
+  };
+
   useEffect(() => {
     const token = new URLSearchParams(window.location.hash.slice(1)).get('access_token') || localStorage.getItem('discord_token');
     if (token) {
         localStorage.setItem('discord_token', token);
         fetchUser(token);
     }
-    
-    // Request Notification Permission
-    if (Notification.permission !== "granted") {
-        Notification.requestPermission();
-    }
   }, []);
 
-  // Polling for Notifications
+  // Polling for Real-Time Updates
   useEffect(() => {
     if (!user) return;
     const interval = setInterval(async () => {
@@ -225,21 +244,37 @@ const LoginPage: React.FC = () => {
             const res = await fetch(`${API_URL}/updates`);
             const data = await res.json();
             
+            // New Action Logged
             if (lastLogCount > 0 && data.logsCount > lastLogCount) {
-                // Trigger Notification
-                if (Notification.permission === "granted") {
-                    new Notification("NULLX Panel", {
-                        body: `Новое действие: ${data.lastLog.action.toUpperCase()} от ${data.lastLog.adminId}`,
-                        icon: 'https://cdn-icons-png.flaticon.com/512/566/566736.png'
-                    });
+                const newLog = data.lastLog;
+                if (newLog.adminId !== user.id) { // Don't notify if I did it (handled locally)
+                    addToast("Новое действие", `${newLog.action.toUpperCase()} от Admin ID ${newLog.adminId}`, 'info');
                 }
+                // Refresh data
+                fetchStaffList(user.id);
+                if (selectedStaff) fetchLogs(selectedStaff.id);
             }
             if (data.logsCount !== lastLogCount) setLastLogCount(data.logsCount);
+
+            // New Appeal
+            if (lastAppealCount > 0 && data.appealsCount > lastAppealCount) {
+                 addToast("Новая апелляция", "Поступила новая объяснительная!", 'warning');
+                 if (isAdmin && viewTab === 'appeals') fetchAppeals();
+            }
+            if (data.appealsCount !== lastAppealCount) setLastAppealCount(data.appealsCount);
+
+             // New LOA Request
+             if (lastLoaRequestCount > 0 && data.loaRequestsCount > lastLoaRequestCount) {
+                if (isCurator) addToast("Заявка на отпуск", "Поступил новый запрос на неактив", 'info');
+                if (isCurator && viewTab === 'loa_requests') fetchLoaRequests();
+           }
+           if (data.loaRequestsCount !== lastLoaRequestCount) setLastLoaRequestCount(data.loaRequestsCount);
+
         } catch(e) {}
-    }, 10000); // Check every 10 sec
+    }, 5000); // Check every 5 sec
 
     return () => clearInterval(interval);
-  }, [user, lastLogCount]);
+  }, [user, lastLogCount, lastAppealCount, lastLoaRequestCount, selectedStaff, viewTab, isCurator, isAdmin]);
 
   const fetchUser = async (token: string) => {
       setLoading(true);
@@ -248,73 +283,14 @@ const LoginPage: React.FC = () => {
           if (!res.ok) throw new Error("Auth failed");
           const data = await res.json();
           
-          setTempUser(data);
-
-          // --- 2FA PERSISTENCE CHECK ---
-          const expiryStr = localStorage.getItem(TWO_FA_EXPIRY_KEY);
-          if (expiryStr) {
-              const expiry = parseInt(expiryStr);
-              if (Date.now() < expiry) {
-                  // Session valid, skip 2FA
-                  setUser(data);
-                  fetchStaffList(data.id);
-                  setAuthStep('dashboard');
-                  return;
-              }
-          }
-          
-          // Request 2FA Code generation
-          const initRes = await fetch(`${API_URL}/auth/2fa/init`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ userId: data.id })
-          });
-          
-          if (!initRes.ok) {
-              const err = await initRes.json();
-              throw new Error(err.error || "2FA Init Failed");
-          }
-
-          setAuthStep('2fa');
-          // --- 2FA LOGIC END ---
+          setUser(data);
+          fetchStaffList(data.id);
+          setAuthStep('dashboard');
 
       } catch (e: any) {
           console.error(e);
-          setTwoFactorError(e.message || "Ошибка авторизации");
-          // Only clear token if it's a hard auth failure, not just a 2FA send failure
+          // Only clear token if it's a hard auth failure
           if (e.message === "Auth failed") localStorage.removeItem('discord_token');
-      } finally {
-          setLoading(false);
-      }
-  };
-
-  const handle2FASubmit = async () => {
-      if (!tempUser || !twoFactorCode) return;
-      setLoading(true);
-      setTwoFactorError('');
-
-      try {
-          const res = await fetch(`${API_URL}/auth/2fa/verify`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ userId: tempUser.id, code: twoFactorCode })
-          });
-
-          if (!res.ok) {
-              const err = await res.json();
-              throw new Error(err.error);
-          }
-
-          // 2FA Success -> Save Expiry (6 hours)
-          localStorage.setItem(TWO_FA_EXPIRY_KEY, (Date.now() + 6 * 60 * 60 * 1000).toString());
-          
-          setUser(tempUser);
-          fetchStaffList(tempUser.id);
-          setAuthStep('dashboard');
-
-      } catch(e: any) {
-          setTwoFactorError(e.message || "Неверный код");
-          playSound('click'); // Error sound ideally
       } finally {
           setLoading(false);
       }
@@ -417,13 +393,14 @@ const LoginPage: React.FC = () => {
                 adminId: user.id
             })
         });
-        setSuccessMsg('СИСТЕМА: Действие выполнено успешно');
-        setTimeout(() => setSuccessMsg(''), 2000);
+        
+        addToast('Успешно', `Действие ${actionType} выполнено`, 'success');
+
         setActionType(null);
         fetchLogs(selectedStaff.id); 
-        fetchStaffList(user.id); // Refresh roles
+        fetchStaffList(user.id); 
       } catch(e) {
-          alert("Ошибка выполнения");
+          addToast('Ошибка', 'Не удалось выполнить действие', 'error');
       } finally {
           setIsSending(false);
       }
@@ -436,10 +413,11 @@ const LoginPage: React.FC = () => {
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ appealId, action, adminId: user.id })
           });
-          setSuccessMsg(action === 'approve' ? 'Апелляция принята' : 'Апелляция отклонена');
-          setTimeout(() => setSuccessMsg(''), 2000);
+          addToast('Решение принято', action === 'approve' ? 'Апелляция принята' : 'Апелляция отклонена', 'success');
           fetchAppeals();
-      } catch(e) {}
+      } catch(e) {
+        addToast('Ошибка', 'Не удалось обработать апелляцию', 'error');
+      }
   };
 
   const handleLoaResolve = async (requestId: string, action: 'approve' | 'reject') => {
@@ -449,11 +427,12 @@ const LoginPage: React.FC = () => {
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ requestId, action, adminId: user.id })
           });
-          setSuccessMsg(action === 'approve' ? 'Отпуск одобрен' : 'Отпуск отклонен');
-          setTimeout(() => setSuccessMsg(''), 2000);
+          addToast('Решение принято', action === 'approve' ? 'Отпуск одобрен' : 'Отпуск отклонен', 'success');
           fetchLoaRequests();
           fetchStaffList(user.id);
-      } catch(e) {}
+      } catch(e) {
+          addToast('Ошибка', 'Не удалось обработать заявку', 'error');
+      }
   };
 
   const handleSaveNick = async () => {
@@ -465,11 +444,10 @@ const LoginPage: React.FC = () => {
               body: JSON.stringify({ targetId: selectedStaff.id, nickname: newNick })
           });
           
-          setSuccessMsg('IGN ОБНОВЛЕН');
+          addToast('Успешно', 'IGN обновлен', 'success');
           setShowNickModal(false);
           await fetchStaffList(user.id);
-          setTimeout(() => setSuccessMsg(''), 2000);
-      } catch(e) {}
+      } catch(e) { addToast('Ошибка', 'Не удалось сохранить ник', 'error'); }
   };
 
   const handleSaveBanner = async () => {
@@ -483,15 +461,11 @@ const LoginPage: React.FC = () => {
               body: JSON.stringify({ targetId: targetId, bannerUrl: newBannerUrl })
           });
           
-          setSuccessMsg('БАННЕР ОБНОВЛЕН');
+          addToast('Успешно', 'Баннер обновлен', 'success');
           setShowBannerModal(false);
           setNewBannerUrl('');
-          
-          // Sync logic is handled inside fetchStaffList
           await fetchStaffList(user.id);
-          
-          setTimeout(() => setSuccessMsg(''), 2000);
-      } catch(e) {}
+      } catch(e) { addToast('Ошибка', 'Не удалось сохранить баннер', 'error'); }
   }
 
   const handleDeleteBanner = async () => {
@@ -503,20 +477,17 @@ const LoginPage: React.FC = () => {
               body: JSON.stringify({ targetId: selectedStaff.id, bannerUrl: '' })
           });
           
-          setSuccessMsg('БАННЕР УДАЛЕН');
+          addToast('Успешно', 'Баннер удален', 'success');
           await fetchStaffList(user.id);
-          setTimeout(() => setSuccessMsg(''), 2000);
-      } catch(e) {}
+      } catch(e) { addToast('Ошибка', 'Не удалось удалить баннер', 'error'); }
   }
 
   const handleLoaClick = (e: React.MouseEvent) => {
-      e.stopPropagation(); // Prevent opening profile when clicking button
+      e.stopPropagation(); 
       const me = staffList.find(s => s.isCurrentUser);
       if (me?.loa && me.loa.active) {
-          // If already active, allow stopping immediately (or prompt)
           submitStopLoa();
       } else {
-          // If not active, open REQUEST modal
           setShowLoaModal(true);
       }
   };
@@ -537,13 +508,12 @@ const LoginPage: React.FC = () => {
           
           if (!res.ok) {
               const err = await res.json();
-              alert(err.error);
+              addToast('Ошибка', err.error, 'error');
               return;
           }
 
           setShowLoaModal(false);
-          setSuccessMsg('ЗАЯВКА ОТПРАВЛЕНА');
-          setTimeout(() => setSuccessMsg(''), 2000);
+          addToast('Успешно', 'Заявка отправлена куратору', 'success');
       } catch(e) {}
   }
 
@@ -556,8 +526,7 @@ const LoginPage: React.FC = () => {
               body: JSON.stringify({ userId: user.id })
           });
           await fetchStaffList(user.id);
-          setSuccessMsg('НЕАКТИВ ВЫКЛЮЧЕН');
-          setTimeout(() => setSuccessMsg(''), 2000);
+          addToast('Успешно', 'Вы вернулись из неактива', 'success');
       } catch(e) {}
   }
 
@@ -594,84 +563,46 @@ const LoginPage: React.FC = () => {
                 </div>
             </button>
           )}
-
-          {twoFactorError && (
-             <div className="absolute bottom-10 bg-red-900/20 border border-red-500/20 text-red-500 px-6 py-3 rounded-xl font-bold text-xs">
-                 ⚠️ {twoFactorError}
-             </div>
-          )}
       </div>
   );
 
   // ============================
-  // RENDER: 2FA SCREEN (Step 2)
-  // ============================
-  if (authStep === '2fa') return (
-    <div className="min-h-screen bg-[#050505] flex items-center justify-center relative overflow-hidden">
-        <ParticleBackground />
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,_transparent_0%,_#050505_100%)] opacity-80"></div>
-        
-        <div className="relative z-10 bg-[#0a0a0a] border border-white/10 p-8 rounded-3xl w-full max-w-sm text-center shadow-2xl animate-in zoom-in-95 duration-300">
-             <div className="w-16 h-16 bg-purple-500/10 rounded-full flex items-center justify-center mx-auto mb-6 border border-purple-500/20 shadow-[0_0_20px_rgba(168,85,247,0.15)]">
-                 <ShieldCheck className="w-8 h-8 text-purple-500" />
-             </div>
-             
-             <h2 className="text-xl font-black text-white uppercase tracking-tight mb-2">Двухфакторная защита</h2>
-             <p className="text-zinc-500 text-xs mb-6 leading-relaxed">
-                 Вам в ЛС Discord отправлен одноразовый код.<br/>
-                 Введите его ниже для входа.
-             </p>
-
-             <div className="space-y-4">
-                 <input 
-                    type="text" 
-                    placeholder="000000"
-                    maxLength={6}
-                    value={twoFactorCode}
-                    onChange={(e) => setTwoFactorCode(e.target.value.replace(/\D/g,''))}
-                    className="w-full bg-black border border-white/10 text-center text-2xl font-mono tracking-[0.5em] py-4 rounded-2xl outline-none focus:border-purple-500 focus:shadow-[0_0_15px_rgba(168,85,247,0.2)] transition-all text-white placeholder:text-zinc-800"
-                 />
-                 
-                 {twoFactorError && (
-                     <div className="text-red-500 text-[10px] font-bold uppercase tracking-wider animate-pulse flex items-center justify-center gap-1">
-                         <ShieldAlert className="w-3 h-3" /> {twoFactorError}
-                     </div>
-                 )}
-
-                 <button 
-                    onClick={handle2FASubmit}
-                    disabled={loading || twoFactorCode.length < 6}
-                    className="w-full py-4 bg-white text-black font-black uppercase rounded-xl hover:bg-zinc-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed mt-2 text-xs tracking-widest shadow-[0_0_20px_rgba(255,255,255,0.1)] flex items-center justify-center gap-2"
-                 >
-                    {loading ? <Loader2 className="w-4 h-4 animate-spin"/> : 'ПОДТВЕРДИТЬ'}
-                 </button>
-                 
-                 <button 
-                    onClick={() => { setAuthStep('login'); localStorage.removeItem('discord_token'); }}
-                    className="text-[10px] text-zinc-600 hover:text-zinc-400 font-bold uppercase tracking-wider mt-4"
-                 >
-                     Отмена / Выход
-                 </button>
-             </div>
-        </div>
-    </div>
-  );
-
-  // ============================
-  // RENDER: DASHBOARD (Step 3)
+  // RENDER: DASHBOARD (Step 2)
   // ============================
   return (
     <div className="min-h-screen w-full bg-[#030303] text-zinc-100 overflow-hidden flex font-sans selection:bg-purple-500/30">
       <ParticleBackground />
       
-      {successMsg && (
-          <div className="absolute top-8 left-1/2 -translate-x-1/2 z-50 animate-in slide-in-from-top-5 fade-in duration-300">
-              <div className="bg-emerald-950/80 border border-emerald-500/30 text-emerald-300 px-6 py-3 rounded-lg font-mono text-xs shadow-[0_0_20px_rgba(16,185,129,0.2)] backdrop-blur-md flex items-center gap-3">
-                  <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></div>
-                  {successMsg}
+      {/* TOAST CONTAINER */}
+      <div className="fixed top-6 right-6 z-[100] flex flex-col gap-3 pointer-events-none">
+          {toasts.map(toast => (
+              <div 
+                  key={toast.id} 
+                  className="bg-[#0a0a0a]/90 backdrop-blur-md border border-white/10 p-4 rounded-xl shadow-2xl w-80 pointer-events-auto animate-in slide-in-from-right fade-in duration-300 flex items-start gap-3"
+              >
+                  <div className={`p-2 rounded-lg ${
+                      toast.type === 'success' ? 'bg-emerald-500/10 text-emerald-500' :
+                      toast.type === 'error' ? 'bg-red-500/10 text-red-500' :
+                      toast.type === 'warning' ? 'bg-amber-500/10 text-amber-500' :
+                      'bg-blue-500/10 text-blue-500'
+                  }`}>
+                      {toast.type === 'success' ? <Check className="w-4 h-4" /> :
+                       toast.type === 'error' ? <X className="w-4 h-4" /> :
+                       toast.type === 'warning' ? <AlertTriangle className="w-4 h-4" /> :
+                       <Info className="w-4 h-4" />}
+                  </div>
+                  <div>
+                      <h4 className={`text-xs font-bold uppercase mb-0.5 ${
+                          toast.type === 'success' ? 'text-emerald-400' :
+                          toast.type === 'error' ? 'text-red-400' :
+                          toast.type === 'warning' ? 'text-amber-400' :
+                          'text-blue-400'
+                      }`}>{toast.title}</h4>
+                      <p className="text-[11px] text-zinc-400 leading-tight">{toast.message}</p>
+                  </div>
               </div>
-          </div>
-      )}
+          ))}
+      </div>
 
       {/* BANNER MODAL */}
       {showBannerModal && (
@@ -773,10 +704,9 @@ const LoginPage: React.FC = () => {
       <div className="w-[80px] md:w-[320px] bg-[#050505] border-r border-white/5 flex flex-col z-20 transition-all duration-300">
           {/* Header */}
           <div className="h-20 flex items-center justify-center md:justify-start md:px-6 border-b border-white/5">
-                <div className="w-10 h-10 bg-purple-600 rounded-lg flex items-center justify-center font-black text-black shadow-[0_0_15px_rgba(147,51,234,0.3)]">NX</div>
+                <img src="/images/logo.png" alt="NULLX" className="w-auto h-8 object-contain" />
                 <div className="hidden md:block ml-4">
-                    <div className="font-black text-lg tracking-tight">NULLX</div>
-                    <div className="text-[9px] text-zinc-600 uppercase tracking-widest font-bold">Панель Управления</div>
+                    <div className="text-[9px] text-zinc-600 uppercase tracking-widest font-bold mt-1">Панель Управления</div>
                 </div>
           </div>
 

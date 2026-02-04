@@ -27,7 +27,6 @@ const MOCK_DB = {
     loaRequests: [], // { id, userId, username, duration, reason, date }
     appeals: [], // { id, userId, warnId (optional), text, status: 'pending'|'approved'|'rejected', date }
     minecraftNicks: {}, // { userId: "Nickname" }
-    twoFactorCodes: {}, // { userId: { code: "123456", expires: timestamp } }
     banners: {} // { userId: "https://image.url" }
 };
 
@@ -147,65 +146,6 @@ async function logActionToDiscord(action, targetUser, adminUser, reason, details
 
 // === API Routes ===
 
-// --- 2FA ROUTES ---
-app.post('/api/auth/2fa/init', async (req, res) => {
-    const { userId } = req.body;
-    if (!userId) return res.status(400).json({ error: "Missing userId" });
-
-    try {
-        const user = await client.users.fetch(userId).catch(() => null);
-        if (!user) return res.status(404).json({ error: "Discord user not found" });
-
-        // Generate 6-digit code
-        const code = Math.floor(100000 + Math.random() * 900000).toString();
-        
-        // Save to DB (Expires in 5 mins)
-        MOCK_DB.twoFactorCodes[userId] = {
-            code,
-            expires: Date.now() + 5 * 60 * 1000
-        };
-
-        // Send DM
-        const embed = new EmbedBuilder()
-            .setTitle('🔐 NULLX Access Code')
-            .setDescription(`Ваш код подтверждения для входа в панель:\n# \`${code}\``)
-            .setColor(0x9333EA) // Purple
-            .setFooter({ text: 'Код действителен 5 минут. Никому не сообщайте его.' })
-            .setTimestamp();
-
-        await user.send({ embeds: [embed] });
-        console.log(`[2FA] Sent code ${code} to ${user.tag}`);
-
-        res.json({ success: true, message: "Code sent to DM" });
-    } catch (error) {
-        console.error("[2FA] Error:", error);
-        res.status(500).json({ error: "Не удалось отправить сообщение в ЛС. Откройте личные сообщения!" });
-    }
-});
-
-app.post('/api/auth/2fa/verify', (req, res) => {
-    const { userId, code } = req.body;
-    
-    const record = MOCK_DB.twoFactorCodes[userId];
-
-    if (!record) {
-        return res.status(400).json({ error: "Код не запрошен или истек." });
-    }
-
-    if (Date.now() > record.expires) {
-        delete MOCK_DB.twoFactorCodes[userId];
-        return res.status(400).json({ error: "Срок действия кода истек." });
-    }
-
-    if (record.code !== code) {
-        return res.status(400).json({ error: "Неверный код." });
-    }
-
-    // Success
-    delete MOCK_DB.twoFactorCodes[userId];
-    res.json({ success: true });
-});
-
 app.get('/api/staff', async (req, res) => {
     if (!client.isReady()) return res.status(503).json({ error: "Bot starting..." });
 
@@ -279,13 +219,14 @@ app.get('/api/logs/:userId', (req, res) => {
 
 // Endpoint for Notification Polling
 app.get('/api/updates', (req, res) => {
-    // Return counts so client can check if something changed
+    // Return counts and last items so client can check if something changed
     res.json({
         logsCount: MOCK_DB.logs.length,
         appealsCount: MOCK_DB.appeals.length,
         loaRequestsCount: MOCK_DB.loaRequests.length,
         lastLog: MOCK_DB.logs[MOCK_DB.logs.length - 1],
-        lastAppeal: MOCK_DB.appeals[MOCK_DB.appeals.length - 1]
+        lastAppeal: MOCK_DB.appeals[MOCK_DB.appeals.length - 1],
+        lastLoaRequest: MOCK_DB.loaRequests[MOCK_DB.loaRequests.length - 1]
     });
 });
 
