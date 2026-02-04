@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "NULLX Panel Fullstack",
   "scripts": {
-    "start": "node server.js",
+    "start:server": "node server.js",
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview"
