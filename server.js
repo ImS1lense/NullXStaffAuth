@@ -121,6 +121,7 @@ app.get('/api/staff', async (req, res) => {
         const result = staffMembers.map(m => ({
             id: m.id,
             username: m.user.username,
+            displayName: m.displayName, // Никнейм на сервере (обычно это ник в Minecraft)
             global_name: m.user.globalName,
             avatar: m.user.avatar,
             roles: m.roles.cache.map(r => r.id),

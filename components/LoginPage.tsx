@@ -4,7 +4,7 @@ import {
     ShieldCheck, Lock, Cpu, LogOut, Ban, Users, Search, 
     RefreshCw, ChevronLeft, ArrowUpCircle, 
     ArrowDownCircle, UserPlus, Trash2, Check, AlertTriangle, Eye,
-    Send, X, Loader2, AlertCircle
+    Send, X, Loader2, AlertCircle, Box
 } from 'lucide-react';
 
 // ==========================================
@@ -74,6 +74,7 @@ interface DiscordUser {
 interface StaffDisplay {
   id: string;
   username: string;
+  displayName: string; // Никнейм (Minecraft ник)
   avatarUrl: string;
   roleId: string;
   roleName: string;
@@ -247,6 +248,7 @@ const LoginPage: React.FC = () => {
          staffMap.set(member.id, {
              id: member.id,
              username: member.username,
+             displayName: member.displayName || member.username, // Берем никнейм или юзернейм
              avatarUrl: member.avatar 
                 ? `https://cdn.discordapp.com/avatars/${member.id}/${member.avatar}.png` 
                 : 'https://cdn.discordapp.com/embed/avatars/0.png',
@@ -280,6 +282,7 @@ const LoginPage: React.FC = () => {
           staffMap.set(currentUserId, {
             id: currentUserId,
             username: currentUserData.username,
+            displayName: currentUserData.global_name || currentUserData.username, // fallback for local user
             avatarUrl: currentUserData.avatar 
                 ? `https://cdn.discordapp.com/avatars/${currentUserId}/${currentUserData.avatar}.png` 
                 : 'https://cdn.discordapp.com/embed/avatars/0.png',
@@ -420,7 +423,8 @@ const LoginPage: React.FC = () => {
   };
 
   const filteredStaff = staffList.filter(member => 
-    member.username.toLowerCase().includes(searchQuery.toLowerCase())
+    member.username.toLowerCase().includes(searchQuery.toLowerCase()) || 
+    member.displayName.toLowerCase().includes(searchQuery.toLowerCase())
   );
 
   return (
@@ -506,15 +510,52 @@ const LoginPage: React.FC = () => {
                                 <ChevronLeft className="w-4 h-4" /> Назад
                             </button>
                             <div className="flex items-center gap-3">
-                                <img src={selectedStaff.avatarUrl} alt="" className="w-8 h-8 rounded-full border border-white/10" />
-                                <div>
-                                    <p className="text-sm font-bold leading-none">{selectedStaff.username}</p>
-                                    <p className={`text-[10px] font-bold ${selectedStaff.roleColor}`}>{selectedStaff.roleName}</p>
-                                </div>
+                                {/* Small discord avatar top right */}
+                                <img src={selectedStaff.avatarUrl} alt="" className="w-8 h-8 rounded-full border border-white/10 opacity-50" />
                             </div>
                         </div>
 
                         <div className="flex-1 flex flex-col items-center justify-center relative">
+                            {/* MINECRAFT PROFILE HEADER */}
+                            {!actionType && (
+                                <div className="flex flex-col items-center mb-10 animate-in fade-in zoom-in duration-500">
+                                    <div className="relative mb-6 group">
+                                         {/* Minecraft Head Render */}
+                                        <div className="w-32 h-32 md:w-40 md:h-40 bg-zinc-900 rounded-3xl border-4 border-white/5 shadow-2xl flex items-center justify-center overflow-hidden relative">
+                                            <div className="absolute inset-0 bg-purple-500/10 animate-pulse"></div>
+                                            <img 
+                                                src={`https://minotar.net/helm/${selectedStaff.displayName}/150.png`}
+                                                alt={selectedStaff.displayName}
+                                                className="w-full h-full object-contain relative z-10"
+                                                style={{ imageRendering: 'pixelated' }}
+                                                onError={(e) => {
+                                                    // Fallback to steve if minotar fails
+                                                    (e.target as HTMLImageElement).src = `https://minotar.net/helm/MHF_Steve/150.png`;
+                                                }}
+                                            />
+                                        </div>
+                                        {/* Status Indicator */}
+                                        <div className={`absolute bottom-0 right-0 w-6 h-6 rounded-full border-4 border-[#0a0a0a] 
+                                            ${selectedStaff.status === 'online' ? 'bg-emerald-500 shadow-[0_0_15px_rgba(16,185,129,0.5)]' : 
+                                              selectedStaff.status === 'idle' ? 'bg-yellow-500' : 
+                                              selectedStaff.status === 'dnd' ? 'bg-red-500' : 'bg-zinc-500'}`}>
+                                        </div>
+                                    </div>
+                                    
+                                    <h2 className="text-3xl font-black text-white tracking-tighter mb-1 flex items-center gap-2">
+                                        {selectedStaff.displayName}
+                                        {selectedStaff.displayName !== selectedStaff.username && (
+                                            <span className="text-xs font-normal text-zinc-600 bg-white/5 px-2 py-1 rounded border border-white/5 font-mono">
+                                                @{selectedStaff.username}
+                                            </span>
+                                        )}
+                                    </h2>
+                                    <div className={`text-xs font-bold uppercase tracking-[0.2em] py-1 px-3 rounded-full bg-white/5 border border-white/5 ${selectedStaff.roleColor}`}>
+                                        {selectedStaff.roleName}
+                                    </div>
+                                </div>
+                            )}
+
                             {/* SUCCESS OVERLAY */}
                             {isSuccess && (
                                 <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-[#0a0a0a]/90 backdrop-blur-sm animate-in fade-in zoom-in duration-300 rounded-3xl">
@@ -772,7 +813,8 @@ const LoginPage: React.FC = () => {
                                                       member.status === 'dnd' ? 'bg-red-500' : 'bg-zinc-500'}`}></div>
                                             </div>
                                             <div className="flex flex-col">
-                                                <h4 className="text-sm font-bold text-zinc-200 group-hover:text-white transition-colors">{member.username}</h4>
+                                                {/* Имя в списке - отображаем никнейм (DisplayName) */}
+                                                <h4 className="text-sm font-bold text-zinc-200 group-hover:text-white transition-colors">{member.displayName}</h4>
                                                 <span className={`text-[10px] font-bold uppercase tracking-wider transition-colors ${member.roleColor || 'text-zinc-500 group-hover:text-purple-400'}`}>
                                                     {member.roleName}
                                                 </span>
