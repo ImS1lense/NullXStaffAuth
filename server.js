@@ -24,6 +24,7 @@ const RANK_ROLE_IDS = [
 const MOCK_DB = {
     logs: [], // { id, targetId, adminId, action, reason, date }
     loa: {},   // { userId: { start: timestamp, end: timestamp, active: boolean, reason: string } }
+    loaRequests: [], // { id, userId, username, duration, reason, date }
     appeals: [], // { id, userId, warnId (optional), text, status: 'pending'|'approved'|'rejected', date }
     minecraftNicks: {}, // { userId: "Nickname" }
     twoFactorCodes: {}, // { userId: { code: "123456", expires: timestamp } }
@@ -217,17 +218,26 @@ app.get('/api/staff', async (req, res) => {
 
         const staffMembers = guild.members.cache.filter(member => member.roles.cache.has(STAFF_ROLE_ID));
 
-        const result = staffMembers.map(m => ({
-            id: m.id,
-            username: m.user.username,
-            displayName: m.displayName,
-            avatar: m.user.avatar,
-            roles: m.roles.cache.map(r => r.id),
-            status: m.presence ? m.presence.status : 'offline',
-            loa: MOCK_DB.loa[m.id] || null,
-            minecraftNick: MOCK_DB.minecraftNicks[m.id] || null,
-            bannerUrl: MOCK_DB.banners[m.id] || null
-        }));
+        const result = staffMembers.map(m => {
+            // Calculate Active Warns
+            const userLogs = MOCK_DB.logs.filter(l => l.targetId === m.id);
+            const warns = userLogs.filter(l => l.action === 'warn').length;
+            const unwarns = userLogs.filter(l => l.action === 'unwarn').length;
+            const activeWarns = Math.max(0, warns - unwarns);
+
+            return {
+                id: m.id,
+                username: m.user.username,
+                displayName: m.displayName,
+                avatar: m.user.avatar,
+                roles: m.roles.cache.map(r => r.id),
+                status: m.presence ? m.presence.status : 'offline',
+                loa: MOCK_DB.loa[m.id] || null,
+                minecraftNick: MOCK_DB.minecraftNicks[m.id] || null,
+                bannerUrl: MOCK_DB.banners[m.id] || null,
+                warnCount: activeWarns
+            };
+        });
 
         res.json(result);
     } catch (error) {
@@ -273,6 +283,7 @@ app.get('/api/updates', (req, res) => {
     res.json({
         logsCount: MOCK_DB.logs.length,
         appealsCount: MOCK_DB.appeals.length,
+        loaRequestsCount: MOCK_DB.loaRequests.length,
         lastLog: MOCK_DB.logs[MOCK_DB.logs.length - 1],
         lastAppeal: MOCK_DB.appeals[MOCK_DB.appeals.length - 1]
     });
@@ -313,29 +324,81 @@ app.post('/api/appeals/resolve', async (req, res) => {
     res.json({ success: true });
 });
 
-app.post('/api/loa', async (req, res) => {
-    const { userId, active, duration, reason } = req.body;
+// --- NEW LOA SYSTEM ROUTES ---
+
+app.get('/api/loa/requests', (req, res) => {
+    res.json(MOCK_DB.loaRequests);
+});
+
+app.post('/api/loa/request', (req, res) => {
+    const { userId, username, duration, reason } = req.body;
     
-    if (active) {
-        MOCK_DB.loa[userId] = {
-            active: true,
-            start: Date.now(),
-            end: Date.now() + (duration * 24 * 60 * 60 * 1000),
-            reason: reason || "Без причины"
-        };
-    } else {
-        if (MOCK_DB.loa[userId]) MOCK_DB.loa[userId].active = false;
+    // Check if user already has pending request
+    if (MOCK_DB.loaRequests.find(r => r.userId === userId)) {
+        return res.status(400).json({ error: "У вас уже есть активная заявка на рассмотрении." });
     }
 
-    try {
-        const user = await client.users.fetch(userId);
-        const details = active 
-            ? `Срок: ${duration} дн. Причина: ${reason}` 
-            : "Вернулся из неактива";
-        logActionToDiscord('loa', user, user, active ? "Ушел в неактив" : "Снял неактив", details);
-    } catch(e) {}
+    const request = {
+        id: Date.now().toString(),
+        userId,
+        username,
+        duration,
+        reason,
+        date: new Date().toISOString()
+    };
 
-    res.json({ success: true, active });
+    MOCK_DB.loaRequests.push(request);
+    res.json({ success: true });
+});
+
+app.post('/api/loa/resolve', async (req, res) => {
+    const { requestId, action, adminId } = req.body; // action: 'approve' | 'reject'
+    
+    const requestIndex = MOCK_DB.loaRequests.findIndex(r => r.id === requestId);
+    if (requestIndex === -1) return res.status(404).json({ error: "Request not found" });
+
+    const request = MOCK_DB.loaRequests[requestIndex];
+    MOCK_DB.loaRequests.splice(requestIndex, 1); // Remove from queue
+
+    if (action === 'approve') {
+        // Activate LOA
+        MOCK_DB.loa[request.userId] = {
+            active: true,
+            start: Date.now(),
+            end: Date.now() + (request.duration * 24 * 60 * 60 * 1000),
+            reason: request.reason
+        };
+
+        try {
+            const user = await client.users.fetch(request.userId);
+            const admin = await client.users.fetch(adminId).catch(() => ({ id: adminId, tag: 'Admin' }));
+            
+            await user.send(`✅ **Ваш отпуск одобрен!**\nСрок: ${request.duration} дн.\nОдобрил: <@${adminId}>`);
+            logActionToDiscord('loa', user, admin, "Отпуск одобрен куратором", `Срок: ${request.duration} дн. Причина: ${request.reason}`);
+        } catch(e) {}
+    } else {
+        try {
+            const user = await client.users.fetch(request.userId);
+            await user.send(`❌ **Заявка на отпуск отклонена.**\nПопробуйте позже или свяжитесь с куратором.`);
+        } catch(e) {}
+    }
+
+    res.json({ success: true });
+});
+
+// Manually stop LOA (no approval needed to come BACK to work)
+app.post('/api/loa/stop', async (req, res) => {
+    const { userId } = req.body;
+    
+    if (MOCK_DB.loa[userId]) {
+        MOCK_DB.loa[userId].active = false;
+        try {
+            const user = await client.users.fetch(userId);
+            logActionToDiscord('loa', user, user, "Вернулся из неактива (Вручную)", "Статус: Active");
+        } catch(e) {}
+    }
+
+    res.json({ success: true });
 });
 
 app.post('/api/action', async (req, res) => {

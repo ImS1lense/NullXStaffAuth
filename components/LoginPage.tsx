@@ -5,7 +5,7 @@ import {
     RefreshCw, ChevronLeft, ArrowUpCircle, 
     ArrowDownCircle, UserPlus, Trash2, Check, AlertTriangle, Eye,
     Send, X, Loader2, AlertCircle, History, User, Coffee, Sparkles, Volume2,
-    LayoutDashboard, Terminal, Activity, Zap, Shield, Calendar, FileText, Bell, PenSquare, Gamepad2, ShieldAlert, Image
+    LayoutDashboard, Terminal, Activity, Zap, Shield, Calendar, FileText, Bell, PenSquare, Gamepad2, ShieldAlert, Image, Plane
 } from 'lucide-react';
 
 // ==========================================
@@ -14,6 +14,7 @@ import {
 const DISCORD_CLIENT_ID = '1468331655646417203'; 
 const TARGET_GUILD_ID = '1458138848822431770'; 
 const STAFF_ROLE_ID = '1458158245700046901';
+const CURATOR_ROLE_ID = '1458277039399374991';
 
 const ALLOWED_ADMIN_IDS = [
     '802105175720460318', '440704669178789888', '591281053503848469',
@@ -88,6 +89,7 @@ interface StaffDisplay {
     loa: { active: boolean, start: number, end: number, reason: string } | null;
     minecraftNick: string | null;
     bannerUrl: string | null;
+    warnCount: number;
 }
 
 const ParticleBackground = () => {
@@ -174,12 +176,13 @@ const LoginPage: React.FC = () => {
   const [staffList, setStaffList] = useState<StaffDisplay[]>([]);
   const [selectedStaff, setSelectedStaff] = useState<StaffDisplay | null>(null);
   const [loading, setLoading] = useState(false);
-  const [viewTab, setViewTab] = useState<'profile' | 'history' | 'appeals'>('profile');
+  const [viewTab, setViewTab] = useState<'profile' | 'history' | 'appeals' | 'loa_requests'>('profile');
   const [actionType, setActionType] = useState<string | null>(null);
   const [isSending, setIsSending] = useState(false);
   const [successMsg, setSuccessMsg] = useState('');
   const [userLogs, setUserLogs] = useState<any[]>([]);
   const [appeals, setAppeals] = useState<any[]>([]);
+  const [loaRequests, setLoaRequests] = useState<any[]>([]);
   const [actionReason, setActionReason] = useState('');
   const [warnCount, setWarnCount] = useState(1);
   const [searchQuery, setSearchQuery] = useState('');
@@ -199,6 +202,7 @@ const LoginPage: React.FC = () => {
   const [loaReason, setLoaReason] = useState('');
 
   const isAdmin = user && ALLOWED_ADMIN_IDS.includes(user.id);
+  const isCurator = staffList.find(s => s.isCurrentUser)?.roleId === CURATOR_ROLE_ID;
 
   useEffect(() => {
     const token = new URLSearchParams(window.location.hash.slice(1)).get('access_token') || localStorage.getItem('discord_token');
@@ -341,7 +345,8 @@ const LoginPage: React.FC = () => {
                  loa: m.loa ? { ...m.loa, active: m.loa.active } : null,
                  weight: bestRole.weight,
                  minecraftNick: m.minecraftNick,
-                 bannerUrl: m.bannerUrl
+                 bannerUrl: m.bannerUrl,
+                 warnCount: m.warnCount || 0
              };
           }).sort((a: any, b: any) => b.weight - a.weight);
           
@@ -370,6 +375,14 @@ const LoginPage: React.FC = () => {
           const res = await fetch(`${API_URL}/appeals`);
           const data = await res.json();
           setAppeals(data);
+      } catch(e) {}
+  };
+
+  const fetchLoaRequests = async () => {
+      try {
+          const res = await fetch(`${API_URL}/loa/requests`);
+          const data = await res.json();
+          setLoaRequests(data);
       } catch(e) {}
   };
 
@@ -426,6 +439,20 @@ const LoginPage: React.FC = () => {
           setSuccessMsg(action === 'approve' ? 'Апелляция принята' : 'Апелляция отклонена');
           setTimeout(() => setSuccessMsg(''), 2000);
           fetchAppeals();
+      } catch(e) {}
+  };
+
+  const handleLoaResolve = async (requestId: string, action: 'approve' | 'reject') => {
+      try {
+          await fetch(`${API_URL}/loa/resolve`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ requestId, action, adminId: user.id })
+          });
+          setSuccessMsg(action === 'approve' ? 'Отпуск одобрен' : 'Отпуск отклонен');
+          setTimeout(() => setSuccessMsg(''), 2000);
+          fetchLoaRequests();
+          fetchStaffList(user.id);
       } catch(e) {}
   };
 
@@ -486,29 +513,50 @@ const LoginPage: React.FC = () => {
       e.stopPropagation(); // Prevent opening profile when clicking button
       const me = staffList.find(s => s.isCurrentUser);
       if (me?.loa && me.loa.active) {
-          submitLoa(false);
+          // If already active, allow stopping immediately (or prompt)
+          submitStopLoa();
       } else {
+          // If not active, open REQUEST modal
           setShowLoaModal(true);
       }
   };
 
-  const submitLoa = async (active: boolean) => {
+  const requestLoa = async () => {
       if (!user) return;
       try {
-          await fetch(`${API_URL}/loa`, {
+          const res = await fetch(`${API_URL}/loa/request`, {
                method: 'POST',
                headers: { 'Content-Type': 'application/json' },
                body: JSON.stringify({ 
                    userId: user.id, 
-                   active, 
-                   duration: active ? loaDuration : 0, 
-                   reason: active ? loaReason : '' 
+                   username: user.username,
+                   duration: loaDuration, 
+                   reason: loaReason
                })
           });
           
-          await fetchStaffList(user.id);
+          if (!res.ok) {
+              const err = await res.json();
+              alert(err.error);
+              return;
+          }
+
           setShowLoaModal(false);
-          setSuccessMsg(active ? 'НЕАКТИВ ВКЛЮЧЕН' : 'НЕАКТИВ ВЫКЛЮЧЕН');
+          setSuccessMsg('ЗАЯВКА ОТПРАВЛЕНА');
+          setTimeout(() => setSuccessMsg(''), 2000);
+      } catch(e) {}
+  }
+
+  const submitStopLoa = async () => {
+      if (!user) return;
+      try {
+          await fetch(`${API_URL}/loa/stop`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ userId: user.id })
+          });
+          await fetchStaffList(user.id);
+          setSuccessMsg('НЕАКТИВ ВЫКЛЮЧЕН');
           setTimeout(() => setSuccessMsg(''), 2000);
       } catch(e) {}
   }
@@ -675,19 +723,22 @@ const LoginPage: React.FC = () => {
           </div>
       )}
 
-      {/* LOA MODAL */}
+      {/* LOA REQUEST MODAL */}
       {showLoaModal && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
               <div className="bg-[#0a0a0a] border border-white/10 rounded-2xl w-full max-w-md p-6 relative animate-in zoom-in-95 duration-200">
                   <button onClick={() => setShowLoaModal(false)} className="absolute top-4 right-4 text-zinc-500 hover:text-white"><X className="w-5 h-5"/></button>
                   <div className="flex items-center gap-3 mb-6">
                       <div className="p-2 bg-amber-500/10 rounded-lg border border-amber-500/20">
-                          <Coffee className="w-5 h-5 text-amber-500" />
+                          <Plane className="w-5 h-5 text-amber-500" />
                       </div>
-                      <h3 className="text-lg font-bold uppercase tracking-tight">Взять Неактив (LOA)</h3>
+                      <h3 className="text-lg font-bold uppercase tracking-tight">Заявка на Неактив</h3>
                   </div>
                   
                   <div className="space-y-4">
+                      <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl text-xs text-amber-500 mb-4">
+                          ⚠️ Заявка будет отправлена на рассмотрение Куратору. Статус неактива не будет активирован моментально.
+                      </div>
                       <div>
                           <label className="text-[10px] font-bold text-zinc-500 uppercase block mb-2">Длительность (Дней)</label>
                           <input 
@@ -703,15 +754,15 @@ const LoginPage: React.FC = () => {
                           <textarea 
                             value={loaReason}
                             onChange={(e) => setLoaReason(e.target.value)}
-                            placeholder="Почему вы уходите в неактив?"
+                            placeholder="Почему вам нужен отпуск?"
                             className="w-full bg-black border border-white/10 p-3 rounded-xl text-sm h-24 outline-none focus:border-purple-500 transition-colors resize-none"
                           ></textarea>
                       </div>
                       <button 
-                        onClick={() => submitLoa(true)}
+                        onClick={requestLoa}
                         className="w-full py-3 bg-white text-black font-black uppercase rounded-xl hover:bg-zinc-200 transition-colors text-xs tracking-widest mt-2"
                       >
-                          Подтвердить статус
+                          Отправить заявку
                       </button>
                   </div>
               </div>
@@ -819,6 +870,16 @@ const LoginPage: React.FC = () => {
                   <span className={selectedStaff ? 'text-purple-400' : ''}>{selectedStaff ? 'УПРАВЛЕНИЕ_ПЕРСОНАЛОМ' : 'ОЖИДАНИЕ'}</span>
               </div>
               <div className="flex items-center gap-4">
+                  {isCurator && (
+                    <button 
+                        onClick={() => { setViewTab('loa_requests'); fetchLoaRequests(); setSelectedStaff(null); }}
+                        className="flex items-center gap-2 text-[10px] text-zinc-300 bg-white/5 px-3 py-1.5 rounded-full hover:bg-white/10 transition-colors"
+                    >
+                        <Plane className="w-3 h-3 text-blue-500" />
+                        ОТПУСКИ
+                        {loaRequests.length > 0 && <span className="w-1.5 h-1.5 bg-red-500 rounded-full animate-pulse"></span>}
+                    </button>
+                  )}
                   {isAdmin && (
                     <button 
                         onClick={() => { setViewTab('appeals'); fetchAppeals(); setSelectedStaff(null); }}
@@ -835,7 +896,56 @@ const LoginPage: React.FC = () => {
               </div>
           </div>
 
-          {viewTab === 'appeals' && isAdmin ? (
+          {viewTab === 'loa_requests' && isCurator ? (
+              <div className="flex-1 overflow-y-auto p-6 md:p-10 custom-scrollbar">
+                <div className="max-w-4xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-500">
+                    <h2 className="text-2xl font-black mb-6 flex items-center gap-3">
+                        <Plane className="w-6 h-6 text-blue-500" />
+                        ЗАЯВКИ НА ОТПУСК
+                    </h2>
+                    {loaRequests.length === 0 ? (
+                        <div className="p-12 text-center border border-white/5 rounded-3xl bg-[#0a0a0a]">
+                            <Check className="w-12 h-12 text-emerald-500 mx-auto mb-4" />
+                            <div className="text-zinc-500 font-bold">Нет активных заявок</div>
+                        </div>
+                    ) : (
+                        <div className="space-y-4">
+                            {loaRequests.map(req => (
+                                <div key={req.id} className="bg-[#0a0a0a] border border-white/10 rounded-2xl p-6 relative group hover:border-blue-500/30 transition-colors">
+                                    <div className="flex justify-between items-start mb-4">
+                                        <div>
+                                            <div className="text-lg font-bold text-white mb-1">{req.username}</div>
+                                            <div className="text-xs text-zinc-500 font-mono">ID: {req.userId}</div>
+                                        </div>
+                                        <div className="text-right">
+                                            <div className="text-sm font-bold text-blue-400 mb-1">{req.duration} дней</div>
+                                            <div className="text-[10px] font-mono text-zinc-600">{new Date(req.date).toLocaleString()}</div>
+                                        </div>
+                                    </div>
+                                    <div className="bg-black/50 p-4 rounded-xl text-sm text-zinc-300 font-medium mb-6">
+                                        Причина: "{req.reason}"
+                                    </div>
+                                    <div className="flex gap-3">
+                                        <button 
+                                            onClick={() => handleLoaResolve(req.id, 'approve')}
+                                            className="px-4 py-2 bg-emerald-900/20 border border-emerald-500/30 text-emerald-400 rounded-lg text-xs font-bold uppercase hover:bg-emerald-900/40 transition-colors flex items-center gap-2"
+                                        >
+                                            <Check className="w-4 h-4" /> Одобрить
+                                        </button>
+                                        <button 
+                                            onClick={() => handleLoaResolve(req.id, 'reject')}
+                                            className="px-4 py-2 bg-red-900/20 border border-red-500/30 text-red-400 rounded-lg text-xs font-bold uppercase hover:bg-red-900/40 transition-colors flex items-center gap-2"
+                                        >
+                                            <X className="w-4 h-4" /> Отклонить
+                                        </button>
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    )}
+                </div>
+             </div>
+          ) : viewTab === 'appeals' && isAdmin ? (
              <div className="flex-1 overflow-y-auto p-6 md:p-10 custom-scrollbar">
                 <div className="max-w-4xl mx-auto animate-in fade-in slide-in-from-bottom-4 duration-500">
                     <h2 className="text-2xl font-black mb-6 flex items-center gap-3">
@@ -966,10 +1076,20 @@ const LoginPage: React.FC = () => {
                                                   )}
                                               </div>
 
-                                              {/* ROW 2: ID | EDIT IGN | DELETE BANNER */}
+                                              {/* ROW 2: ID | WARN COUNT | EDIT IGN | DELETE BANNER */}
                                               <div className="flex flex-wrap items-center gap-3">
                                                   <div className="px-3 py-1 rounded bg-zinc-900/80 border border-zinc-800 text-zinc-500 text-[10px] font-mono backdrop-blur-sm">
                                                       ID: {selectedStaff.id}
+                                                  </div>
+
+                                                  {/* WARN COUNT DISPLAY */}
+                                                  <div className={`px-3 py-1 rounded border text-[10px] font-bold uppercase flex items-center gap-2 backdrop-blur-sm ${
+                                                      selectedStaff.warnCount > 0 
+                                                      ? 'bg-red-900/20 border-red-500/50 text-red-400' 
+                                                      : 'bg-zinc-900/80 border-zinc-700 text-zinc-500'
+                                                  }`}>
+                                                      <AlertTriangle className={`w-3 h-3 ${selectedStaff.warnCount > 0 ? 'text-red-500' : 'text-zinc-600'}`} />
+                                                      WARNS: {selectedStaff.warnCount}
                                                   </div>
                                                   
                                                   {isAdmin && (
