@@ -344,7 +344,16 @@ const LoginPage: React.FC = () => {
                  bannerUrl: m.bannerUrl
              };
           }).sort((a: any, b: any) => b.weight - a.weight);
+          
           setStaffList(formatted);
+          
+          // REAL-TIME SYNC: Update selectedStaff if it exists to match new data
+          setSelectedStaff(prev => {
+              if (!prev) return null;
+              const updated = formatted.find((s: StaffDisplay) => s.id === prev.id);
+              return updated || prev;
+          });
+
       } catch(e) {}
   };
 
@@ -370,6 +379,12 @@ const LoginPage: React.FC = () => {
       setViewTab('profile');
       setActionType(null);
       fetchLogs(member.id);
+  };
+
+  const handleSelfClick = () => {
+      if (!user) return;
+      const me = staffList.find(s => s.isCurrentUser);
+      if (me) handleSelectStaff(me);
   };
 
   const handleAction = async () => {
@@ -425,9 +440,7 @@ const LoginPage: React.FC = () => {
           
           setSuccessMsg('IGN ОБНОВЛЕН');
           setShowNickModal(false);
-          // Update local state immediately
-          setSelectedStaff(prev => prev ? { ...prev, minecraftNick: newNick || null } : null);
-          setStaffList(prev => prev.map(s => s.id === selectedStaff.id ? { ...s, minecraftNick: newNick || null } : s));
+          await fetchStaffList(user.id);
           setTimeout(() => setSuccessMsg(''), 2000);
       } catch(e) {}
   };
@@ -447,12 +460,8 @@ const LoginPage: React.FC = () => {
           setShowBannerModal(false);
           setNewBannerUrl('');
           
-          // Refresh list to show new banner
+          // Sync logic is handled inside fetchStaffList
           await fetchStaffList(user.id);
-          
-          if (selectedStaff && selectedStaff.id === targetId) {
-             setSelectedStaff(prev => prev ? { ...prev, bannerUrl: newBannerUrl } : null);
-          }
           
           setTimeout(() => setSuccessMsg(''), 2000);
       } catch(e) {}
@@ -469,14 +478,12 @@ const LoginPage: React.FC = () => {
           
           setSuccessMsg('БАННЕР УДАЛЕН');
           await fetchStaffList(user.id);
-           if (selectedStaff) {
-             setSelectedStaff(prev => prev ? { ...prev, bannerUrl: null } : null);
-          }
           setTimeout(() => setSuccessMsg(''), 2000);
       } catch(e) {}
   }
 
-  const handleLoaClick = () => {
+  const handleLoaClick = (e: React.MouseEvent) => {
+      e.stopPropagation(); // Prevent opening profile when clicking button
       const me = staffList.find(s => s.isCurrentUser);
       if (me?.loa && me.loa.active) {
           submitLoa(false);
@@ -724,13 +731,17 @@ const LoginPage: React.FC = () => {
 
           {/* User Status Card */}
           <div className="hidden md:block p-6 border-b border-white/5 bg-white/[0.01]">
-              <div className="flex items-center gap-3 mb-4">
+              <div 
+                  className="flex items-center gap-3 mb-4 cursor-pointer hover:bg-white/5 p-2 -mx-2 rounded-lg transition-colors group"
+                  onClick={handleSelfClick}
+                  title="Открыть мой профиль"
+              >
                   <div className="relative">
                     <img src={`https://cdn.discordapp.com/avatars/${user.id}/${user.avatar}.png`} className="w-10 h-10 rounded-lg bg-zinc-800" />
                     <div className="absolute -bottom-1 -right-1 w-3 h-3 bg-emerald-500 rounded-full border-2 border-[#050505]"></div>
                   </div>
                   <div className="overflow-hidden">
-                      <div className="font-bold text-sm truncate">{user.username}</div>
+                      <div className="font-bold text-sm truncate group-hover:text-purple-400 transition-colors">{user.username}</div>
                       <div className="text-[10px] text-zinc-500 font-mono">{user.id}</div>
                   </div>
               </div>
