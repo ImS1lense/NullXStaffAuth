@@ -26,7 +26,8 @@ const MOCK_DB = {
     loa: {},   // { userId: { start: timestamp, end: timestamp, active: boolean, reason: string } }
     appeals: [], // { id, userId, warnId (optional), text, status: 'pending'|'approved'|'rejected', date }
     minecraftNicks: {}, // { userId: "Nickname" }
-    twoFactorCodes: {} // { userId: { code: "123456", expires: timestamp } }
+    twoFactorCodes: {}, // { userId: { code: "123456", expires: timestamp } }
+    banners: {} // { userId: "https://image.url" }
 };
 
 app.use(cors({
@@ -224,7 +225,8 @@ app.get('/api/staff', async (req, res) => {
             roles: m.roles.cache.map(r => r.id),
             status: m.presence ? m.presence.status : 'offline',
             loa: MOCK_DB.loa[m.id] || null,
-            minecraftNick: MOCK_DB.minecraftNicks[m.id] || null // Send MC Nick
+            minecraftNick: MOCK_DB.minecraftNicks[m.id] || null,
+            bannerUrl: MOCK_DB.banners[m.id] || null
         }));
 
         res.json(result);
@@ -244,6 +246,19 @@ app.post('/api/set-nickname', (req, res) => {
     }
     
     res.json({ success: true, nickname: MOCK_DB.minecraftNicks[targetId] });
+});
+
+app.post('/api/set-banner', (req, res) => {
+    const { targetId, bannerUrl } = req.body;
+    if (!targetId) return res.status(400).json({ error: "Target ID required" });
+
+    if (bannerUrl && bannerUrl.trim() !== "") {
+        MOCK_DB.banners[targetId] = bannerUrl;
+    } else {
+        delete MOCK_DB.banners[targetId];
+    }
+    
+    res.json({ success: true, bannerUrl: MOCK_DB.banners[targetId] });
 });
 
 app.get('/api/logs/:userId', (req, res) => {

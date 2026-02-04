@@ -5,7 +5,7 @@ import {
     RefreshCw, ChevronLeft, ArrowUpCircle, 
     ArrowDownCircle, UserPlus, Trash2, Check, AlertTriangle, Eye,
     Send, X, Loader2, AlertCircle, History, User, Coffee, Sparkles, Volume2,
-    LayoutDashboard, Terminal, Activity, Zap, Shield, Calendar, FileText, Bell, PenSquare, Gamepad2, ShieldAlert
+    LayoutDashboard, Terminal, Activity, Zap, Shield, Calendar, FileText, Bell, PenSquare, Gamepad2, ShieldAlert, Image
 } from 'lucide-react';
 
 // ==========================================
@@ -24,6 +24,8 @@ const PROD_API_URL = 'https://nullx-backend.onrender.com/api';
 const API_URL = (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'))
     ? 'http://localhost:4000/api'
     : PROD_API_URL;
+
+const TWO_FA_EXPIRY_KEY = 'nullx_2fa_expiry';
 
 const playSound = (type: 'hover' | 'click') => {
     try {
@@ -85,6 +87,7 @@ interface StaffDisplay {
     weight: number;
     loa: { active: boolean, start: number, end: number, reason: string } | null;
     minecraftNick: string | null;
+    bannerUrl: string | null;
 }
 
 const ParticleBackground = () => {
@@ -186,6 +189,10 @@ const LoginPage: React.FC = () => {
   const [showNickModal, setShowNickModal] = useState(false);
   const [newNick, setNewNick] = useState('');
 
+  // Banner Edit State
+  const [showBannerModal, setShowBannerModal] = useState(false);
+  const [newBannerUrl, setNewBannerUrl] = useState('');
+
   // LOA Modal State
   const [showLoaModal, setShowLoaModal] = useState(false);
   const [loaDuration, setLoaDuration] = useState(7);
@@ -237,8 +244,20 @@ const LoginPage: React.FC = () => {
           if (!res.ok) throw new Error("Auth failed");
           const data = await res.json();
           
-          // --- 2FA LOGIC START ---
           setTempUser(data);
+
+          // --- 2FA PERSISTENCE CHECK ---
+          const expiryStr = localStorage.getItem(TWO_FA_EXPIRY_KEY);
+          if (expiryStr) {
+              const expiry = parseInt(expiryStr);
+              if (Date.now() < expiry) {
+                  // Session valid, skip 2FA
+                  setUser(data);
+                  fetchStaffList(data.id);
+                  setAuthStep('dashboard');
+                  return;
+              }
+          }
           
           // Request 2FA Code generation
           const initRes = await fetch(`${API_URL}/auth/2fa/init`, {
@@ -282,7 +301,9 @@ const LoginPage: React.FC = () => {
               throw new Error(err.error);
           }
 
-          // 2FA Success -> Proceed to Dashboard
+          // 2FA Success -> Save Expiry (6 hours)
+          localStorage.setItem(TWO_FA_EXPIRY_KEY, (Date.now() + 6 * 60 * 60 * 1000).toString());
+          
           setUser(tempUser);
           fetchStaffList(tempUser.id);
           setAuthStep('dashboard');
@@ -319,7 +340,8 @@ const LoginPage: React.FC = () => {
                  isCurrentUser: m.id === myId,
                  loa: m.loa ? { ...m.loa, active: m.loa.active } : null,
                  weight: bestRole.weight,
-                 minecraftNick: m.minecraftNick
+                 minecraftNick: m.minecraftNick,
+                 bannerUrl: m.bannerUrl
              };
           }).sort((a: any, b: any) => b.weight - a.weight);
           setStaffList(formatted);
@@ -409,6 +431,50 @@ const LoginPage: React.FC = () => {
           setTimeout(() => setSuccessMsg(''), 2000);
       } catch(e) {}
   };
+
+  const handleSaveBanner = async () => {
+      if (!selectedStaff && !newBannerUrl.includes('http')) return;
+      const targetId = selectedStaff ? selectedStaff.id : user.id;
+
+      try {
+          await fetch(`${API_URL}/set-banner`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ targetId: targetId, bannerUrl: newBannerUrl })
+          });
+          
+          setSuccessMsg('БАННЕР ОБНОВЛЕН');
+          setShowBannerModal(false);
+          setNewBannerUrl('');
+          
+          // Refresh list to show new banner
+          await fetchStaffList(user.id);
+          
+          if (selectedStaff && selectedStaff.id === targetId) {
+             setSelectedStaff(prev => prev ? { ...prev, bannerUrl: newBannerUrl } : null);
+          }
+          
+          setTimeout(() => setSuccessMsg(''), 2000);
+      } catch(e) {}
+  }
+
+  const handleDeleteBanner = async () => {
+      if (!selectedStaff) return;
+      try {
+          await fetch(`${API_URL}/set-banner`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ targetId: selectedStaff.id, bannerUrl: '' })
+          });
+          
+          setSuccessMsg('БАННЕР УДАЛЕН');
+          await fetchStaffList(user.id);
+           if (selectedStaff) {
+             setSelectedStaff(prev => prev ? { ...prev, bannerUrl: null } : null);
+          }
+          setTimeout(() => setSuccessMsg(''), 2000);
+      } catch(e) {}
+  }
 
   const handleLoaClick = () => {
       const me = staffList.find(s => s.isCurrentUser);
@@ -548,6 +614,31 @@ const LoginPage: React.FC = () => {
               <div className="bg-emerald-950/80 border border-emerald-500/30 text-emerald-300 px-6 py-3 rounded-lg font-mono text-xs shadow-[0_0_20px_rgba(16,185,129,0.2)] backdrop-blur-md flex items-center gap-3">
                   <div className="w-2 h-2 bg-emerald-500 rounded-full animate-pulse"></div>
                   {successMsg}
+              </div>
+          </div>
+      )}
+
+      {/* BANNER MODAL */}
+      {showBannerModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+              <div className="bg-[#0a0a0a] border border-white/10 rounded-2xl w-full max-w-sm p-6 relative animate-in zoom-in-95 duration-200">
+                  <button onClick={() => setShowBannerModal(false)} className="absolute top-4 right-4 text-zinc-500 hover:text-white"><X className="w-5 h-5"/></button>
+                  <h3 className="text-lg font-bold uppercase tracking-tight mb-4">Изменить баннер</h3>
+                  <div className="space-y-4">
+                      <input 
+                        type="text" 
+                        value={newBannerUrl}
+                        onChange={(e) => setNewBannerUrl(e.target.value)}
+                        placeholder="Ссылка на изображение (https://...)"
+                        className="w-full bg-black border border-white/10 p-3 rounded-xl text-sm outline-none focus:border-purple-500 transition-colors"
+                      />
+                      <button 
+                        onClick={handleSaveBanner}
+                        className="w-full py-3 bg-white text-black font-black uppercase rounded-xl hover:bg-zinc-200 transition-colors text-xs tracking-widest"
+                      >
+                          Сохранить
+                      </button>
+                  </div>
               </div>
           </div>
       )}
@@ -697,7 +788,7 @@ const LoginPage: React.FC = () => {
           
           <div className="p-4 border-t border-white/5">
               <button 
-                  onClick={() => { localStorage.removeItem('discord_token'); window.location.reload(); }}
+                  onClick={() => { localStorage.removeItem('discord_token'); localStorage.removeItem(TWO_FA_EXPIRY_KEY); window.location.reload(); }}
                   className="w-full flex items-center justify-center md:justify-start gap-3 text-zinc-600 hover:text-red-400 transition-colors p-2"
               >
                   <LogOut className="w-4 h-4" />
@@ -785,7 +876,18 @@ const LoginPage: React.FC = () => {
                       
                       {/* PROFILE HEADER CARD */}
                       <div className="w-full bg-[#0a0a0a] border border-white/5 rounded-3xl p-8 mb-8 relative overflow-hidden group">
-                          <div className="absolute top-0 right-0 w-[300px] h-[300px] bg-purple-500/5 rounded-full blur-[100px] -translate-y-1/2 translate-x-1/2"></div>
+                          {/* BANNER BACKGROUND */}
+                          {selectedStaff.bannerUrl ? (
+                              <>
+                                <div 
+                                    className="absolute inset-0 bg-cover bg-center z-0 opacity-40 group-hover:opacity-50 transition-opacity duration-500"
+                                    style={{ backgroundImage: `url(${selectedStaff.bannerUrl})` }}
+                                ></div>
+                                <div className="absolute inset-0 bg-gradient-to-r from-[#0a0a0a] via-[#0a0a0a]/80 to-transparent z-0"></div>
+                              </>
+                          ) : (
+                              <div className="absolute top-0 right-0 w-[300px] h-[300px] bg-purple-500/5 rounded-full blur-[100px] -translate-y-1/2 translate-x-1/2"></div>
+                          )}
                           
                           <div className="flex flex-col md:flex-row items-start gap-8 relative z-10">
                               {/* AVATAR BOX */}
@@ -807,7 +909,7 @@ const LoginPage: React.FC = () => {
                                   <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-4">
                                       <div>
                                           <div className="flex items-center gap-3 mb-2">
-                                            <h1 className="text-4xl font-black text-white tracking-tighter uppercase">{selectedStaff.displayName}</h1>
+                                            <h1 className="text-4xl font-black text-white tracking-tighter uppercase drop-shadow-lg">{selectedStaff.displayName}</h1>
                                             {selectedStaff.minecraftNick && (
                                                 <div className="flex items-center gap-1 bg-zinc-800 px-2 py-1 rounded text-[10px] text-zinc-400 font-mono" title="Minecraft Nickname">
                                                     <Gamepad2 className="w-3 h-3" />
@@ -817,25 +919,25 @@ const LoginPage: React.FC = () => {
                                           </div>
                                           
                                           <div className="flex flex-wrap items-center gap-3">
-                                              <div className={`px-3 py-1 rounded text-[10px] font-black uppercase tracking-widest border ${selectedStaff.roleBg} ${selectedStaff.roleColor}`}>
+                                              <div className={`px-3 py-1 rounded text-[10px] font-black uppercase tracking-widest border ${selectedStaff.roleBg} ${selectedStaff.roleColor} shadow-lg backdrop-blur-sm`}>
                                                   {selectedStaff.roleName}
                                               </div>
-                                              <div className="px-3 py-1 rounded bg-zinc-900 border border-zinc-800 text-zinc-500 text-[10px] font-mono">
+                                              <div className="px-3 py-1 rounded bg-zinc-900/80 border border-zinc-800 text-zinc-500 text-[10px] font-mono backdrop-blur-sm">
                                                   ID: {selectedStaff.id}
                                               </div>
                                               
                                               {/* STATUS INDICATOR */}
-                                              <div className={`px-3 py-1 rounded border text-[10px] font-bold uppercase flex items-center gap-2 ${
+                                              <div className={`px-3 py-1 rounded border text-[10px] font-bold uppercase flex items-center gap-2 backdrop-blur-sm ${
                                                   selectedStaff.status === 'online' || selectedStaff.status === 'dnd' || selectedStaff.status === 'idle'
                                                   ? 'bg-emerald-900/20 border-emerald-500/50 text-emerald-400' 
-                                                  : 'bg-zinc-900 border-zinc-700 text-zinc-500'
+                                                  : 'bg-zinc-900/80 border-zinc-700 text-zinc-500'
                                               }`}>
                                                   <div className={`w-2 h-2 rounded-full ${selectedStaff.status === 'online' || selectedStaff.status === 'dnd' || selectedStaff.status === 'idle' ? 'bg-emerald-500 animate-pulse' : 'bg-zinc-600'}`}></div>
                                                   {selectedStaff.status === 'offline' ? 'OFFLINE' : 'ONLINE'}
                                               </div>
 
                                               {selectedStaff.loa && selectedStaff.loa.active && (
-                                                  <div className="px-3 py-1 rounded bg-amber-900/20 border border-amber-500/50 text-amber-500 text-[10px] font-bold uppercase flex items-center gap-2">
+                                                  <div className="px-3 py-1 rounded bg-amber-900/20 border border-amber-500/50 text-amber-500 text-[10px] font-bold uppercase flex items-center gap-2 backdrop-blur-sm">
                                                       <Coffee className="w-3 h-3" /> В ОТПУСКЕ
                                                   </div>
                                               )}
@@ -843,9 +945,29 @@ const LoginPage: React.FC = () => {
                                               {isAdmin && (
                                                   <button 
                                                     onClick={() => { setNewNick(selectedStaff.minecraftNick || ''); setShowNickModal(true); }}
-                                                    className="px-2 py-1 bg-zinc-800 hover:bg-zinc-700 rounded text-zinc-400 hover:text-white transition-colors flex items-center gap-1 text-[10px] font-bold"
+                                                    className="px-2 py-1 bg-zinc-800/80 hover:bg-zinc-700 rounded text-zinc-400 hover:text-white transition-colors flex items-center gap-1 text-[10px] font-bold backdrop-blur-sm"
                                                   >
                                                       <PenSquare className="w-3 h-3" /> IGN
+                                                  </button>
+                                              )}
+
+                                              {/* BANNER BUTTONS */}
+                                              {selectedStaff.isCurrentUser && (
+                                                  <button 
+                                                    onClick={() => { setNewBannerUrl(selectedStaff.bannerUrl || ''); setShowBannerModal(true); }}
+                                                    className="px-2 py-1 bg-purple-900/40 hover:bg-purple-900/60 border border-purple-500/30 rounded text-purple-300 transition-colors flex items-center gap-1 text-[10px] font-bold backdrop-blur-sm"
+                                                  >
+                                                      <Image className="w-3 h-3" /> ФОН
+                                                  </button>
+                                              )}
+                                              
+                                              {isAdmin && selectedStaff.bannerUrl && (
+                                                  <button 
+                                                    onClick={handleDeleteBanner}
+                                                    className="px-2 py-1 bg-red-900/40 hover:bg-red-900/60 border border-red-500/30 rounded text-red-300 transition-colors flex items-center gap-1 text-[10px] font-bold backdrop-blur-sm"
+                                                    title="Удалить баннер"
+                                                  >
+                                                      <Trash2 className="w-3 h-3" />
                                                   </button>
                                               )}
                                           </div>
@@ -854,13 +976,13 @@ const LoginPage: React.FC = () => {
                                       <div className="flex gap-2">
                                           <button 
                                               onClick={() => setViewTab('profile')}
-                                              className={`px-6 py-3 rounded-xl text-xs font-bold uppercase tracking-wider transition-all border ${viewTab === 'profile' ? 'bg-white text-black border-white shadow-[0_0_20px_rgba(255,255,255,0.2)]' : 'bg-white/5 text-zinc-400 border-white/5 hover:bg-white/10'}`}
+                                              className={`px-6 py-3 rounded-xl text-xs font-bold uppercase tracking-wider transition-all border backdrop-blur-sm ${viewTab === 'profile' ? 'bg-white text-black border-white shadow-[0_0_20px_rgba(255,255,255,0.2)]' : 'bg-white/5 text-zinc-400 border-white/5 hover:bg-white/10'}`}
                                           >
                                               Обзор
                                           </button>
                                           <button 
                                               onClick={() => { setViewTab('history'); fetchLogs(selectedStaff.id); }}
-                                              className={`px-6 py-3 rounded-xl text-xs font-bold uppercase tracking-wider transition-all border ${viewTab === 'history' ? 'bg-white text-black border-white shadow-[0_0_20px_rgba(255,255,255,0.2)]' : 'bg-white/5 text-zinc-400 border-white/5 hover:bg-white/10'}`}
+                                              className={`px-6 py-3 rounded-xl text-xs font-bold uppercase tracking-wider transition-all border backdrop-blur-sm ${viewTab === 'history' ? 'bg-white text-black border-white shadow-[0_0_20px_rgba(255,255,255,0.2)]' : 'bg-white/5 text-zinc-400 border-white/5 hover:bg-white/10'}`}
                                           >
                                               Логи
                                           </button>
