@@ -5,7 +5,7 @@ import {
     RefreshCw, ChevronLeft, ArrowUpCircle, 
     ArrowDownCircle, UserPlus, Trash2, Check, AlertTriangle, Eye,
     Send, X, Loader2, AlertCircle, History, User, Coffee, Sparkles, Volume2,
-    LayoutDashboard, Terminal, Activity, Zap, Shield, Calendar, FileText, Bell, PenSquare, Gamepad2
+    LayoutDashboard, Terminal, Activity, Zap, Shield, Calendar, FileText, Bell, PenSquare, Gamepad2, ShieldAlert
 } from 'lucide-react';
 
 // ==========================================
@@ -161,7 +161,13 @@ const CalendarView = ({ loa }: { loa: StaffDisplay['loa'] }) => {
 };
 
 const LoginPage: React.FC = () => {
-  const [user, setUser] = useState<any>(null);
+  // Auth State
+  const [authStep, setAuthStep] = useState<'login' | '2fa' | 'dashboard'>('login');
+  const [tempUser, setTempUser] = useState<any>(null); // Stores user data before 2FA verify
+  const [twoFactorCode, setTwoFactorCode] = useState('');
+  const [twoFactorError, setTwoFactorError] = useState('');
+
+  const [user, setUser] = useState<any>(null); // Authenticated user
   const [staffList, setStaffList] = useState<StaffDisplay[]>([]);
   const [selectedStaff, setSelectedStaff] = useState<StaffDisplay | null>(null);
   const [loading, setLoading] = useState(false);
@@ -230,10 +236,60 @@ const LoginPage: React.FC = () => {
           const res = await fetch('https://discord.com/api/users/@me', { headers: { Authorization: `Bearer ${token}` } });
           if (!res.ok) throw new Error("Auth failed");
           const data = await res.json();
-          setUser(data);
-          fetchStaffList(data.id);
-      } catch (e) {
-          localStorage.removeItem('discord_token');
+          
+          // --- 2FA LOGIC START ---
+          setTempUser(data);
+          
+          // Request 2FA Code generation
+          const initRes = await fetch(`${API_URL}/auth/2fa/init`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ userId: data.id })
+          });
+          
+          if (!initRes.ok) {
+              const err = await initRes.json();
+              throw new Error(err.error || "2FA Init Failed");
+          }
+
+          setAuthStep('2fa');
+          // --- 2FA LOGIC END ---
+
+      } catch (e: any) {
+          console.error(e);
+          setTwoFactorError(e.message || "Ошибка авторизации");
+          // Only clear token if it's a hard auth failure, not just a 2FA send failure
+          if (e.message === "Auth failed") localStorage.removeItem('discord_token');
+      } finally {
+          setLoading(false);
+      }
+  };
+
+  const handle2FASubmit = async () => {
+      if (!tempUser || !twoFactorCode) return;
+      setLoading(true);
+      setTwoFactorError('');
+
+      try {
+          const res = await fetch(`${API_URL}/auth/2fa/verify`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ userId: tempUser.id, code: twoFactorCode })
+          });
+
+          if (!res.ok) {
+              const err = await res.json();
+              throw new Error(err.error);
+          }
+
+          // 2FA Success -> Proceed to Dashboard
+          setUser(tempUser);
+          fetchStaffList(tempUser.id);
+          setAuthStep('dashboard');
+
+      } catch(e: any) {
+          setTwoFactorError(e.message || "Неверный код");
+          playSound('click'); // Error sound ideally
       } finally {
           setLoading(false);
       }
@@ -386,30 +442,103 @@ const LoginPage: React.FC = () => {
 
   const filteredStaff = staffList.filter(s => s.displayName.toLowerCase().includes(searchQuery.toLowerCase()));
 
-  // LOGIN SCREEN
-  if (!user) return (
+  // ============================
+  // RENDER: LOGIN SCREEN (Step 1)
+  // ============================
+  if (authStep === 'login') return (
       <div className="min-h-screen bg-[#050505] flex items-center justify-center relative overflow-hidden">
           <ParticleBackground />
           <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,_transparent_0%,_#050505_100%)] opacity-80"></div>
-          <button 
-              onMouseEnter={() => playSound('hover')}
-              onClick={() => { playSound('click'); window.location.href = `https://discord.com/api/oauth2/authorize?client_id=${DISCORD_CLIENT_ID}&redirect_uri=${encodeURIComponent(window.location.origin + '/')}&response_type=token&scope=identify%20guilds.members.read`; }}
-              className="relative z-10 group"
-          >
-              <div className="absolute -inset-1 bg-gradient-to-r from-purple-600 to-indigo-600 rounded-2xl blur opacity-30 group-hover:opacity-70 transition duration-1000"></div>
-              <div className="relative bg-[#09090b] border border-white/10 px-10 py-6 rounded-2xl flex items-center gap-6 hover:bg-zinc-900 transition-all">
-                  <div className="p-3 bg-[#5865F2]/10 rounded-xl border border-[#5865F2]/20">
-                    <DiscordIcon className="w-8 h-8 text-[#5865F2]" />
-                  </div>
-                  <div className="text-left">
-                      <div className="text-[10px] uppercase tracking-[0.2em] text-zinc-500 font-bold mb-1">Nullx Access</div>
-                      <div className="text-xl font-black text-white tracking-tight">АВТОРИЗАЦИЯ</div>
-                  </div>
-              </div>
-          </button>
+          
+          {loading ? (
+             <div className="relative z-10 flex flex-col items-center gap-4 animate-pulse">
+                <Loader2 className="w-10 h-10 text-purple-600 animate-spin" />
+                <div className="text-zinc-500 text-xs font-bold tracking-widest uppercase">Загрузка...</div>
+             </div>
+          ) : (
+            <button 
+                onMouseEnter={() => playSound('hover')}
+                onClick={() => { playSound('click'); window.location.href = `https://discord.com/api/oauth2/authorize?client_id=${DISCORD_CLIENT_ID}&redirect_uri=${encodeURIComponent(window.location.origin + '/')}&response_type=token&scope=identify%20guilds.members.read`; }}
+                className="relative z-10 group"
+            >
+                <div className="absolute -inset-1 bg-gradient-to-r from-purple-600 to-indigo-600 rounded-2xl blur opacity-30 group-hover:opacity-70 transition duration-1000"></div>
+                <div className="relative bg-[#09090b] border border-white/10 px-10 py-6 rounded-2xl flex items-center gap-6 hover:bg-zinc-900 transition-all">
+                    <div className="p-3 bg-[#5865F2]/10 rounded-xl border border-[#5865F2]/20">
+                        <DiscordIcon className="w-8 h-8 text-[#5865F2]" />
+                    </div>
+                    <div className="text-left">
+                        <div className="text-[10px] uppercase tracking-[0.2em] text-zinc-500 font-bold mb-1">Nullx Access</div>
+                        <div className="text-xl font-black text-white tracking-tight">АВТОРИЗАЦИЯ</div>
+                    </div>
+                </div>
+            </button>
+          )}
+
+          {twoFactorError && (
+             <div className="absolute bottom-10 bg-red-900/20 border border-red-500/20 text-red-500 px-6 py-3 rounded-xl font-bold text-xs">
+                 ⚠️ {twoFactorError}
+             </div>
+          )}
       </div>
   );
 
+  // ============================
+  // RENDER: 2FA SCREEN (Step 2)
+  // ============================
+  if (authStep === '2fa') return (
+    <div className="min-h-screen bg-[#050505] flex items-center justify-center relative overflow-hidden">
+        <ParticleBackground />
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,_transparent_0%,_#050505_100%)] opacity-80"></div>
+        
+        <div className="relative z-10 bg-[#0a0a0a] border border-white/10 p-8 rounded-3xl w-full max-w-sm text-center shadow-2xl animate-in zoom-in-95 duration-300">
+             <div className="w-16 h-16 bg-purple-500/10 rounded-full flex items-center justify-center mx-auto mb-6 border border-purple-500/20 shadow-[0_0_20px_rgba(168,85,247,0.15)]">
+                 <ShieldCheck className="w-8 h-8 text-purple-500" />
+             </div>
+             
+             <h2 className="text-xl font-black text-white uppercase tracking-tight mb-2">Двухфакторная защита</h2>
+             <p className="text-zinc-500 text-xs mb-6 leading-relaxed">
+                 Вам в ЛС Discord отправлен одноразовый код.<br/>
+                 Введите его ниже для входа.
+             </p>
+
+             <div className="space-y-4">
+                 <input 
+                    type="text" 
+                    placeholder="000000"
+                    maxLength={6}
+                    value={twoFactorCode}
+                    onChange={(e) => setTwoFactorCode(e.target.value.replace(/\D/g,''))}
+                    className="w-full bg-black border border-white/10 text-center text-2xl font-mono tracking-[0.5em] py-4 rounded-2xl outline-none focus:border-purple-500 focus:shadow-[0_0_15px_rgba(168,85,247,0.2)] transition-all text-white placeholder:text-zinc-800"
+                 />
+                 
+                 {twoFactorError && (
+                     <div className="text-red-500 text-[10px] font-bold uppercase tracking-wider animate-pulse flex items-center justify-center gap-1">
+                         <ShieldAlert className="w-3 h-3" /> {twoFactorError}
+                     </div>
+                 )}
+
+                 <button 
+                    onClick={handle2FASubmit}
+                    disabled={loading || twoFactorCode.length < 6}
+                    className="w-full py-4 bg-white text-black font-black uppercase rounded-xl hover:bg-zinc-200 transition-colors disabled:opacity-50 disabled:cursor-not-allowed mt-2 text-xs tracking-widest shadow-[0_0_20px_rgba(255,255,255,0.1)] flex items-center justify-center gap-2"
+                 >
+                    {loading ? <Loader2 className="w-4 h-4 animate-spin"/> : 'ПОДТВЕРДИТЬ'}
+                 </button>
+                 
+                 <button 
+                    onClick={() => { setAuthStep('login'); localStorage.removeItem('discord_token'); }}
+                    className="text-[10px] text-zinc-600 hover:text-zinc-400 font-bold uppercase tracking-wider mt-4"
+                 >
+                     Отмена / Выход
+                 </button>
+             </div>
+        </div>
+    </div>
+  );
+
+  // ============================
+  // RENDER: DASHBOARD (Step 3)
+  // ============================
   return (
     <div className="min-h-screen w-full bg-[#030303] text-zinc-100 overflow-hidden flex font-sans selection:bg-purple-500/30">
       <ParticleBackground />
