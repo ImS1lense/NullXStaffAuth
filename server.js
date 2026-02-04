@@ -4,19 +4,25 @@ const cors = require('cors');
 const { Client, GatewayIntentBits, Partials, EmbedBuilder } = require('discord.js');
 
 const app = express();
-// ВАЖНО: Render и другие хостинги выдают свой порт через process.env.PORT
+// Render выдает порт автоматически через process.env.PORT
 const PORT = process.env.PORT || 4000;
 
-const GUILD_ID = '1458138848822431770'; // ID вашего сервера
-const LOG_CHANNEL_ID = '1458163321302945946'; // Канал для логов
-const STAFF_ROLE_ID = '1458158245700046901'; // Роль Staff для фильтрации списка
+// КОНФИГУРАЦИЯ
+const GUILD_ID = process.env.GUILD_ID || '1458138848822431770'; 
+const LOG_CHANNEL_ID = '1458163321302945946'; 
+const STAFF_ROLE_ID = '1458158245700046901'; 
 
-// Middleware
-// Разрешаем запросы с вашего сайта на Vercel и с локалки
+// === ВАЖНО: НАСТРОЙКА ДОСТУПА (CORS) ===
 app.use(cors({
-    origin: ['https://o-auth2-null-x.vercel.app', 'http://localhost:3000', 'http://localhost:5173'],
-    credentials: true
+    origin: [
+        'https://o-auth2-null-x.vercel.app', // Твой сайт на Vercel
+        'http://localhost:3000',             // Локальная разработка
+        'http://localhost:5173'              // Vite локально
+    ],
+    credentials: true, // Разрешаем куки и заголовки авторизации
+    methods: ['GET', 'POST', 'OPTIONS']
 }));
+
 app.use(express.json());
 
 // Инициализация Discord Клиента
@@ -32,50 +38,31 @@ const client = new Client({
 
 // Логин бота
 if (!process.env.DISCORD_BOT_TOKEN) {
-    console.error("❌ ОШИБКА: Не найден токен бота! Создайте файл .env и добавьте DISCORD_BOT_TOKEN=ваш_токен");
+    console.error("❌ ОШИБКА: Нет токена! Убедитесь, что он добавлен в Environment Variables на Render.");
 } else {
     client.login(process.env.DISCORD_BOT_TOKEN).catch(err => {
-        if (err.message.includes('Used disallowed intents') || err.code === 'DisallowedIntents') {
-            console.error("\n❌ ОШИБКА ДОСТУПА (INTENTS):");
-            console.error("👉 Включите 'Privileged Gateway Intents' (Presence, Server Members, Message Content) в Discord Dev Portal.\n");
-        } else {
-            console.error("❌ ОШИБКА АВТОРИЗАЦИИ БОТА:", err.message);
-        }
+        console.error("❌ ОШИБКА АВТОРИЗАЦИИ БОТА:", err.message);
     });
 }
 
 client.once('ready', () => {
     console.log(`✅ Бот вошел как ${client.user.tag}`);
-    console.log(`🚀 Сервер API запущен на порту ${PORT}`);
-    console.log(`📂 Рабочая директория: ${__dirname}`);
+    console.log(`🚀 API доступно по адресу: https://nullx-backend.onrender.com`);
 });
 
 // === HELPER: LOGGING ===
 async function logActionToDiscord(action, targetUser, adminUser, reason, details = "") {
     try {
         const channel = await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
-        if (!channel) return console.error("Канал логов не найден или нет доступа");
+        if (!channel) return console.log("Канал логов не найден");
 
         const colorMap = {
-            promote: 0x34D399, // Green
-            demote: 0xF97316, // Orange
-            kick: 0xEF4444,   // Red
-            warn: 0xEAB308,   // Yellow
-            unwarn: 0x6366F1, // Indigo
-            hire: 0x3B82F6    // Blue
-        };
-
-        const actionNames = {
-            promote: "ПОВЫШЕНИЕ",
-            demote: "ПОНИЖЕНИЕ",
-            kick: "ИЗГНАНИЕ",
-            warn: "ПРЕДУПРЕЖДЕНИЕ",
-            unwarn: "СНЯТИЕ ВАРНА",
-            hire: "ПРИНЯТИЕ"
+            promote: 0x34D399, demote: 0xF97316, kick: 0xEF4444,
+            warn: 0xEAB308, unwarn: 0x6366F1, hire: 0x3B82F6
         };
 
         const embed = new EmbedBuilder()
-            .setTitle(`ДЕЙСТВИЕ: ${actionNames[action] || action.toUpperCase()}`)
+            .setTitle(`ДЕЙСТВИЕ: ${action.toUpperCase()}`)
             .setColor(colorMap[action] || 0x808080)
             .addFields(
                 { name: 'Администратор', value: `${adminUser ? `<@${adminUser.id}>` : 'Неизвестно'}`, inline: true },
@@ -88,7 +75,7 @@ async function logActionToDiscord(action, targetUser, adminUser, reason, details
 
         await channel.send({ embeds: [embed] });
     } catch (e) {
-        console.error("Failed to send log:", e);
+        console.error("Log error:", e);
     }
 }
 
@@ -96,10 +83,9 @@ async function logActionToDiscord(action, targetUser, adminUser, reason, details
 app.get('/api/staff', async (req, res) => {
     try {
         const guild = await client.guilds.fetch(GUILD_ID);
-        if (!guild) return res.status(404).json({ error: 'Сервер Discord не найден' });
+        if (!guild) return res.status(404).json({ error: 'Discord Server Error' });
 
-        // Загружаем всех участников
-        await guild.members.fetch();
+        await guild.members.fetch(); // Обновляем кэш
 
         const staffMembers = guild.members.cache.filter(member => 
             member.roles.cache.has(STAFF_ROLE_ID)
@@ -116,90 +102,72 @@ app.get('/api/staff', async (req, res) => {
 
         res.json(result);
     } catch (error) {
-        console.error("Error fetching staff:", error);
-        res.status(500).json({ error: "Ошибка получения списка персонала" });
+        console.error("Staff fetch error:", error);
+        res.status(500).json({ error: "Ошибка получения списка" });
     }
 });
 
 // === API: ACTIONS ===
 app.post('/api/action', async (req, res) => {
     const { action, targetId, targetRoleId, reason, warnCount, adminId } = req.body;
-
-    console.log(`[API] Action: ${action} | Target: ${targetId} | Admin: ${adminId}`);
+    
+    // Лог в консоль Render для отладки
+    console.log(`[API REQUEST] Action: ${action} | User: ${targetId}`);
 
     try {
         const guild = await client.guilds.fetch(GUILD_ID);
         const member = await guild.members.fetch({ user: targetId, force: true }).catch(() => null);
-        const adminMember = adminId ? await guild.members.fetch(adminId).catch(() => null) : null;
-
-        if (!member && action !== 'lookup') return res.status(404).json({ error: 'Пользователь не найден' });
-
-        // Проверка прав
-        if (!guild.members.me.permissions.has('Administrator') && !guild.members.me.permissions.has('ManageRoles')) {
-             return res.status(403).json({ error: 'У бота нет прав Администратора' });
-        }
+        
+        if (!member) return res.status(404).json({ error: 'Пользователь не найден в Discord' });
 
         let logDetails = "";
 
+        // ЛОГИКА ДЕЙСТВИЙ
         switch (action) {
             case 'kick':
-                if (!member.kickable) return res.status(403).json({ error: 'Невозможно кикнуть (роль пользователя выше роли бота)' });
+                if (!member.kickable) return res.status(403).json({ error: 'Нет прав кикнуть этого пользователя (его роль выше роли бота)' });
                 await member.kick(reason);
-                logDetails = "Пользователь изгнан с сервера";
+                logDetails = "Пользователь изгнан";
                 break;
 
             case 'promote':
             case 'demote':
             case 'hire':
                 if (!targetRoleId) return res.status(400).json({ error: 'Роль не указана' });
-                const role = guild.roles.cache.get(targetRoleId);
-                
                 await member.roles.add(targetRoleId, reason);
-                logDetails = `Выдана роль: ${role ? role.name : targetRoleId}`;
+                // Тут можно добавить снятие предыдущей роли, если нужно
+                logDetails = `Выдана роль ID: ${targetRoleId}`;
                 break;
 
             case 'warn':
-                logDetails = `Уровень варна: ${warnCount}/3`;
+                logDetails = `Варн ${warnCount}/3`;
                 try {
-                    await member.send({
-                        embeds: [{
-                            title: "⚠️ ПОЛУЧЕНО ПРЕДУПРЕЖДЕНИЕ",
-                            color: 0xFFAA00,
-                            description: `**Причина:** ${reason}\n**Уровень:** ${warnCount}/3`,
-                            footer: { text: `Выдал: Администрация` }
-                        }]
-                    });
-                } catch (e) { logDetails += " (ЛС закрыты)"; }
+                    await member.send(`⚠️ **Вам выдано предупреждение!**\nПричина: ${reason}\nВсего: ${warnCount}/3`);
+                } catch(e) {}
                 break;
-
+                
             case 'unwarn':
-                logDetails = `Варн снят. Уровень: ${warnCount}/3`;
-                 try {
-                    await member.send({
-                        embeds: [{
-                            title: "👁️ ПРЕДУПРЕЖДЕНИЕ СНЯТО",
-                            color: 0x55FF55,
-                            description: `**Причина:** ${reason}`,
-                        }]
-                    });
-                } catch (e) {}
+                logDetails = `Варн снят`;
+                try {
+                    await member.send(`✅ **Предупреждение снято!**\nПричина: ${reason}`);
+                } catch(e) {}
                 break;
-
-            default:
-                return res.status(400).json({ error: 'Неизвестное действие' });
+            
+            default: return res.status(400).json({ error: 'Unknown action' });
         }
 
-        // Send Log
-        logActionToDiscord(action, member.user, adminMember ? adminMember.user : { id: adminId }, reason, logDetails);
+        // Отправляем лог в канал
+        logActionToDiscord(action, member.user, { id: adminId }, reason, logDetails);
 
-        res.json({ success: true, message: `Действие ${action} выполнено` });
+        res.json({ success: true });
 
     } catch (error) {
         console.error("API Error:", error);
-        res.status(500).json({ error: error.message || 'Внутренняя ошибка сервера' });
+        res.status(500).json({ error: error.message });
     }
 });
 
+// Запуск сервера
 app.listen(PORT, () => {
-    // console.log(`Listening on ${PORT}`); 
+    console.log(`✅ Сервер запущен на порту ${PORT}`);
 });
