@@ -97,6 +97,7 @@ const LoginPage: React.FC = () => {
   const [isStaffLoading, setIsStaffLoading] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [widgetError, setWidgetError] = useState(false);
+  const [apiError, setApiError] = useState<string | null>(null);
 
   // Management State
   const [selectedStaff, setSelectedStaff] = useState<StaffDisplay | null>(null);
@@ -220,10 +221,20 @@ const LoginPage: React.FC = () => {
   const fetchStaffList = async (currentUserId: string, currentUserRoles: string[], currentUserData: any, currentUserRoleInfo: any) => {
     setIsStaffLoading(true);
     setWidgetError(false);
+    setApiError(null);
     
     try {
       const res = await fetch(`${API_URL}/staff`);
-      if (!res.ok) throw new Error("Failed to fetch staff from API");
+      
+      if (!res.ok) {
+          // Пытаемся прочитать ошибку из JSON
+          let errorMsg = "Ошибка сервера";
+          try {
+            const errData = await res.json();
+            errorMsg = errData.error || errorMsg;
+          } catch(e) {}
+          throw new Error(errorMsg);
+      }
       
       const realStaffData: any[] = await res.json();
       
@@ -293,6 +304,7 @@ const LoginPage: React.FC = () => {
     } catch (e) {
       console.error("Staff fetch error:", e);
       setWidgetError(true);
+      setApiError((e as Error).message);
     } finally {
         setIsStaffLoading(false);
     }
@@ -727,6 +739,16 @@ const LoginPage: React.FC = () => {
                                 className="w-full bg-[#050505] border border-white/10 rounded-xl py-3 pl-10 pr-4 text-sm text-zinc-300 focus:outline-none focus:border-purple-500/50 transition-all placeholder:text-zinc-700"
                             />
                         </div>
+
+                        {apiError && (
+                            <div className="mb-4 bg-red-500/5 border border-red-500/10 rounded-xl p-3 flex items-start gap-3">
+                                <AlertTriangle className="w-5 h-5 text-red-400 shrink-0 mt-0.5" />
+                                <div className="text-xs text-red-200">
+                                    <span className="font-bold block text-red-400 mb-0.5">Ошибка получения списка</span>
+                                    {apiError}
+                                </div>
+                            </div>
+                        )}
 
                         <div className="flex-1 overflow-y-auto max-h-[400px] pr-2 space-y-2">
                             {isStaffLoading ? (

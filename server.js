@@ -103,10 +103,16 @@ app.get('/api/staff', async (req, res) => {
     }
 
     try {
-        const guild = await client.guilds.fetch(GUILD_ID);
-        if (!guild) return res.status(404).json({ error: 'Discord Server Error' });
+        const guild = await client.guilds.fetch(GUILD_ID).catch(() => null);
+        if (!guild) return res.status(404).json({ error: 'Discord Server Error: Guild not found' });
 
-        await guild.members.fetch(); // Обновляем кэш
+        // Важно: нужно включить SERVER MEMBERS INTENT в Developer Portal
+        try {
+            await guild.members.fetch(); 
+        } catch (e) {
+            console.error("Ошибка получения участников. Проверьте Intents в Dev Portal:", e.message);
+            // Пытаемся продолжить с кэшем, если fetch упал
+        }
 
         const staffMembers = guild.members.cache.filter(member => 
             member.roles.cache.has(STAFF_ROLE_ID)
@@ -124,7 +130,7 @@ app.get('/api/staff', async (req, res) => {
         res.json(result);
     } catch (error) {
         console.error("Staff fetch error:", error);
-        res.status(500).json({ error: "Ошибка получения списка" });
+        res.status(500).json({ error: "Ошибка получения списка: " + error.message });
     }
 });
 
@@ -155,19 +161,20 @@ app.post('/api/action', async (req, res) => {
             case 'demote':
                 if (!targetRoleId) return res.status(400).json({ error: 'Роль не указана' });
                 
-                // 1. Выдаем новую роль
-                await member.roles.add(targetRoleId, reason);
+                // 1. Снимаем все другие ранговые роли, кроме новой
+                const rolesToRemove = member.roles.cache
+                    .filter(role => RANK_ROLE_IDS.includes(role.id) && role.id !== targetRoleId)
+                    .map(role => role.id); // Получаем массив ID для надежности
 
-                // 2. Снимаем все другие ранговые роли, чтобы не было дублей
-                const rolesToRemove = member.roles.cache.filter(role => 
-                    RANK_ROLE_IDS.includes(role.id) && role.id !== targetRoleId
-                );
-                
-                if (rolesToRemove.size > 0) {
+                if (rolesToRemove.length > 0) {
                     await member.roles.remove(rolesToRemove, "Обновление ранга (снятие старого)");
                 }
 
-                logDetails = `Новая роль: <@&${targetRoleId}> (старые сняты)`;
+                // 2. Выдаем новую роль
+                // Проверяем, есть ли уже эта роль, чтобы не спамить API, но add идемпотентен
+                await member.roles.add(targetRoleId, reason);
+
+                logDetails = `Новая роль: <@&${targetRoleId}>`;
                 break;
 
             case 'hire':
