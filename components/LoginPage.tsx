@@ -14,7 +14,7 @@ const DISCORD_CLIENT_ID = '1468331655646417203';
 const TARGET_GUILD_ID = '1458138848822431770'; 
 const STAFF_ROLE_ID = '1458158245700046901';
 
-// СПИСОК ID, ИМЕЮЩИХ ПОЛНЫЙ ДОСТУП (Действия + Вход без роли)
+// СПИСОК ID, ИМЕЮЩИХ ПОЛНЫЙ ДОСТУП
 const ALLOWED_ADMIN_IDS = [
     '802105175720460318',
     '440704669178789888',
@@ -24,8 +24,9 @@ const ALLOWED_ADMIN_IDS = [
     '1468330580910542868'
 ];
 
-// ВАЖНО: АДРЕС ВАШЕГО БЭКЕНДА НА RENDER
-const PROD_API_URL = 'https://nullx-bot.onrender.com/api'; 
+// 1. СЮДА ВСТАВЬТЕ ССЫЛКУ, КОТОРУЮ ВАМ ДАСТ RENDER ПОСЛЕ СОЗДАНИЯ СЕРВИСА
+// Пример: 'https://my-super-bot.onrender.com/api'
+const PROD_API_URL = 'https://nullx-backend.onrender.com/api'; 
 
 const API_URL = (typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'))
     ? 'http://localhost:4000/api'
@@ -52,9 +53,12 @@ const ROLE_DEFINITIONS: Record<string, Omit<RoleDef, 'id'>> = {
 const getRedirectUri = () => {
   if (typeof window !== 'undefined') {
       const host = window.location.hostname;
-      if (host === 'localhost') return 'http://localhost:3000/';
-      if (host === '192.168.1.5') return 'http://192.168.1.5:3000/';
+      // Если запускаем локально
+      if (host === 'localhost' || host === '127.0.0.1') return 'http://localhost:3000/';
+      // Если запускаем на Vercel - берем текущий адрес сайта автоматически
+      return `${window.location.origin}/`; 
   }
+  // Запасной вариант (замените на ваш реальный домен Vercel)
   return 'https://o-auth2-null-x.vercel.app/';
 };
 
