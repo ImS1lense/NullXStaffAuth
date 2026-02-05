@@ -5,7 +5,7 @@ import {
     RefreshCw, ChevronLeft, ArrowUpCircle, 
     ArrowDownCircle, UserPlus, Trash2, Check, AlertTriangle, Eye,
     Send, X, Loader2, AlertCircle, History, User, Coffee, Sparkles, Volume2,
-    LayoutDashboard, Terminal, Activity, Zap, Shield, Calendar, FileText, Bell, PenSquare, Gamepad2, ShieldAlert, Image, Plane, Info, BarChart3, Gavel, FileSearch
+    LayoutDashboard, Terminal, Activity, Zap, Shield, Calendar, FileText, Bell, PenSquare, Gamepad2, ShieldAlert, Image, Plane, Info, BarChart3, Gavel, FileSearch, Clock
 } from 'lucide-react';
 
 // ==========================================
@@ -172,6 +172,20 @@ const CalendarView = ({ loa }: { loa: StaffDisplay['loa'] }) => {
     );
 };
 
+// Helper: Format duration from ms
+const formatDuration = (ms: number) => {
+    if (ms <= 0) return '0с';
+    const seconds = Math.floor(ms / 1000);
+    const minutes = Math.floor(seconds / 60);
+    const hours = Math.floor(minutes / 60);
+    const days = Math.floor(hours / 24);
+
+    if (days > 0) return `${days}д ${hours % 24}ч`;
+    if (hours > 0) return `${hours}ч ${minutes % 60}м`;
+    if (minutes > 0) return `${minutes}м ${seconds % 60}с`;
+    return `${seconds}с`;
+};
+
 const LoginPage: React.FC = () => {
   // Auth State
   const [authStep, setAuthStep] = useState<'login' | 'dashboard'>('login');
@@ -191,6 +205,7 @@ const LoginPage: React.FC = () => {
   const [appeals, setAppeals] = useState<any[]>([]);
   const [loaRequests, setLoaRequests] = useState<any[]>([]);
   const [statsData, setStatsData] = useState({ bans: 0, mutes: 0, checks: 0, history: [] });
+  const [statsRange, setStatsRange] = useState<'all' | 'month' | 'week'>('all');
   const [actionReason, setActionReason] = useState('');
   const [warnCount, setWarnCount] = useState(1);
   const [searchQuery, setSearchQuery] = useState('');
@@ -347,9 +362,9 @@ const LoginPage: React.FC = () => {
       } catch(e) { setUserLogs([]); }
   };
 
-  const fetchStats = async (ign: string) => {
+  const fetchStats = async (ign: string, range: string) => {
       try {
-          const res = await fetch(`${API_URL}/stats/${ign}`);
+          const res = await fetch(`${API_URL}/stats/${ign}?range=${range}`);
           const data = await res.json();
           setStatsData(data);
       } catch(e) { setStatsData({ bans: 0, mutes: 0, checks: 0, history: [] }); }
@@ -1067,7 +1082,7 @@ const LoginPage: React.FC = () => {
                                               Логи
                                           </button>
                                           <button 
-                                              onClick={() => { setViewTab('stats'); fetchStats(selectedStaff.minecraftNick || ''); }}
+                                              onClick={() => { setViewTab('stats'); fetchStats(selectedStaff.minecraftNick || '', 'all'); }}
                                               className={`px-6 py-3 rounded-xl text-xs font-bold uppercase tracking-wider transition-all border backdrop-blur-sm flex items-center gap-2 ${viewTab === 'stats' ? 'bg-white text-black border-white shadow-[0_0_20px_rgba(255,255,255,0.2)]' : 'bg-white/5 text-zinc-400 border-white/5 hover:bg-white/10'}`}
                                           >
                                               <BarChart3 className="w-3 h-3" />
@@ -1180,9 +1195,31 @@ const LoginPage: React.FC = () => {
                           </div>
                       ) : viewTab === 'stats' ? (
                         <div className="bg-[#0a0a0a] border border-white/5 rounded-3xl p-8 min-h-[500px]">
-                            <div className="flex items-center gap-3 mb-8">
-                                <BarChart3 className="w-5 h-5 text-purple-500" />
-                                <h3 className="text-lg font-bold uppercase tracking-tight">Статистика Сервера</h3>
+                            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-8">
+                                <div className="flex items-center gap-3">
+                                    <BarChart3 className="w-5 h-5 text-purple-500" />
+                                    <h3 className="text-lg font-bold uppercase tracking-tight">Статистика Сервера</h3>
+                                </div>
+                                <div className="flex gap-2">
+                                    <button 
+                                        onClick={() => { setStatsRange('week'); fetchStats(selectedStaff.minecraftNick || '', 'week'); }}
+                                        className={`px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-wider transition-all border ${statsRange === 'week' ? 'bg-white text-black border-white shadow-[0_0_10px_rgba(255,255,255,0.2)]' : 'bg-[#0f0f11] text-zinc-500 border-white/5 hover:border-white/20'}`}
+                                    >
+                                        Неделя
+                                    </button>
+                                    <button 
+                                        onClick={() => { setStatsRange('month'); fetchStats(selectedStaff.minecraftNick || '', 'month'); }}
+                                        className={`px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-wider transition-all border ${statsRange === 'month' ? 'bg-white text-black border-white shadow-[0_0_10px_rgba(255,255,255,0.2)]' : 'bg-[#0f0f11] text-zinc-500 border-white/5 hover:border-white/20'}`}
+                                    >
+                                        Месяц
+                                    </button>
+                                    <button 
+                                        onClick={() => { setStatsRange('all'); fetchStats(selectedStaff.minecraftNick || '', 'all'); }}
+                                        className={`px-4 py-2 rounded-lg text-xs font-bold uppercase tracking-wider transition-all border ${statsRange === 'all' ? 'bg-white text-black border-white shadow-[0_0_10px_rgba(255,255,255,0.2)]' : 'bg-[#0f0f11] text-zinc-500 border-white/5 hover:border-white/20'}`}
+                                    >
+                                        Все время
+                                    </button>
+                                </div>
                             </div>
 
                             {!selectedStaff.minecraftNick ? (
@@ -1227,21 +1264,42 @@ const LoginPage: React.FC = () => {
                                         {statsData.history.length === 0 ? (
                                             <div className="text-zinc-600 text-xs font-mono">Нет недавних записей</div>
                                         ) : (
-                                            statsData.history.map((h: any, i) => (
-                                                <div key={i} className="bg-white/[0.02] border border-white/5 p-4 rounded-xl flex items-center justify-between">
-                                                    <div className="flex items-center gap-4">
-                                                        <div className={`p-2 rounded-lg ${h.type === 'ban' ? 'bg-red-500/10 text-red-500' : 'bg-blue-500/10 text-blue-500'}`}>
-                                                            {h.type === 'ban' ? <Gavel className="w-4 h-4"/> : <Volume2 className="w-4 h-4"/>}
+                                            statsData.history.map((h: any, i) => {
+                                                const startTime = parseInt(h.time);
+                                                const endTime = parseInt(h.until);
+                                                const isPermanent = endTime <= 0;
+                                                const duration = isPermanent ? 'Навсегда' : formatDuration(endTime - startTime);
+                                                const expiresAt = isPermanent ? 'Никогда' : new Date(endTime).toLocaleString();
+
+                                                return (
+                                                    <div key={i} className="bg-white/[0.02] border border-white/5 p-4 rounded-xl flex flex-col gap-2">
+                                                        <div className="flex items-center justify-between">
+                                                            <div className="flex items-center gap-3">
+                                                                <div className={`p-2 rounded-lg ${h.type === 'ban' ? 'bg-red-500/10 text-red-500' : 'bg-blue-500/10 text-blue-500'}`}>
+                                                                    {h.type === 'ban' ? <Gavel className="w-4 h-4"/> : <Volume2 className="w-4 h-4"/>}
+                                                                </div>
+                                                                <div>
+                                                                    <div className="text-sm font-bold text-zinc-200">{h.reason}</div>
+                                                                    <div className="text-[10px] text-zinc-500 font-mono">
+                                                                        Выдан: {new Date(startTime).toLocaleString()}
+                                                                    </div>
+                                                                </div>
+                                                            </div>
                                                         </div>
-                                                        <div>
-                                                            <div className="text-sm font-bold text-zinc-200">{h.reason}</div>
-                                                            <div className="text-[10px] text-zinc-500 font-mono">
-                                                                {new Date(parseInt(h.time)).toLocaleString()}
+                                                        
+                                                        <div className="flex items-center gap-4 text-[10px] font-mono text-zinc-400 pl-11">
+                                                            <div className="flex items-center gap-1.5 bg-white/5 px-2 py-1 rounded">
+                                                                <History className="w-3 h-3 text-zinc-500" />
+                                                                <span>Срок: <span className="text-zinc-300">{duration}</span></span>
+                                                            </div>
+                                                            <div className="flex items-center gap-1.5 bg-white/5 px-2 py-1 rounded">
+                                                                <Calendar className="w-3 h-3 text-zinc-500" />
+                                                                <span>Истекает: <span className="text-zinc-300">{expiresAt}</span></span>
                                                             </div>
                                                         </div>
                                                     </div>
-                                                </div>
-                                            ))
+                                                );
+                                            })
                                         )}
                                     </div>
                                 </>

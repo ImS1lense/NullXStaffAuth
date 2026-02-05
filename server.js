@@ -191,6 +191,7 @@ async function logActionToDiscord(action, targetUser, adminUser, reason, details
 // --- STATS ENDPOINT ---
 app.get('/api/stats/:ign', async (req, res) => {
     const ign = req.params.ign;
+    const range = req.query.range || 'all'; // 'week', 'month', 'all'
     
     // Default stats
     let stats = {
@@ -205,37 +206,46 @@ app.get('/api/stats/:ign', async (req, res) => {
     }
 
     try {
+        let cutoffTime = 0;
+        const now = Date.now();
+
+        if (range === 'week') {
+            cutoffTime = now - (7 * 24 * 60 * 60 * 1000);
+        } else if (range === 'month') {
+            cutoffTime = now - (30 * 24 * 60 * 60 * 1000);
+        }
+
         // 1. Fetch Bans Count
         const [banRows] = await litebansPool.query(
-            'SELECT COUNT(*) as count FROM litebans_bans WHERE banned_by_name = ?', 
-            [ign]
+            'SELECT COUNT(*) as count FROM litebans_bans WHERE banned_by_name = ? AND time >= ?', 
+            [ign, cutoffTime]
         );
         stats.bans = banRows[0]?.count || 0;
 
         // 2. Fetch Mutes Count
         const [muteRows] = await litebansPool.query(
-            'SELECT COUNT(*) as count FROM litebans_mutes WHERE banned_by_name = ?', 
-            [ign]
+            'SELECT COUNT(*) as count FROM litebans_mutes WHERE banned_by_name = ? AND time >= ?', 
+            [ign, cutoffTime]
         );
         stats.mutes = muteRows[0]?.count || 0;
 
         // 3. Fetch Recent History (Union of bans and mutes, limit 5)
-        // Note: 'time' is usually a BIGINT in ms in litebans
+        // We also filter history by time to match the range, although history usually implies "latest"
         const [historyRows] = await litebansPool.query(
             `
-            (SELECT 'ban' as type, reason, time, until FROM litebans_bans WHERE banned_by_name = ? ORDER BY time DESC LIMIT 5)
+            (SELECT 'ban' as type, reason, time, until FROM litebans_bans WHERE banned_by_name = ? AND time >= ? ORDER BY time DESC LIMIT 5)
             UNION ALL
-            (SELECT 'mute' as type, reason, time, until FROM litebans_mutes WHERE banned_by_name = ? ORDER BY time DESC LIMIT 5)
+            (SELECT 'mute' as type, reason, time, until FROM litebans_mutes WHERE banned_by_name = ? AND time >= ? ORDER BY time DESC LIMIT 5)
             ORDER BY time DESC LIMIT 5
             `,
-            [ign, ign]
+            [ign, cutoffTime, ign, cutoffTime]
         );
         
         stats.history = historyRows;
 
         // 4. Fetch Checks (Placeholder - when checks DB is ready)
         // if (checksPool) {
-        //    const [checkRows] = await checksPool.query('SELECT COUNT(*) as count FROM checks_table WHERE staff = ?', [ign]);
+        //    const [checkRows] = await checksPool.query('SELECT COUNT(*) as count FROM checks_table WHERE staff = ? AND time >= ?', [ign, cutoffTime]);
         //    stats.checks = checkRows[0]?.count || 0;
         // }
 
