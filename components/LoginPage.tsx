@@ -5,7 +5,7 @@ import {
     RefreshCw, ChevronLeft, ArrowUpCircle, 
     ArrowDownCircle, UserPlus, Trash2, Check, AlertTriangle, Eye,
     Send, X, Loader2, AlertCircle, History, User, Coffee, Sparkles, Volume2,
-    LayoutDashboard, Terminal, Activity, Zap, Shield, Calendar, FileText, Bell, PenSquare, Gamepad2, ShieldAlert, Image, Plane, Info
+    LayoutDashboard, Terminal, Activity, Zap, Shield, Calendar, FileText, Bell, PenSquare, Gamepad2, ShieldAlert, Image, Plane, Info, BarChart3, Gavel, FileSearch
 } from 'lucide-react';
 
 // ==========================================
@@ -180,7 +180,7 @@ const LoginPage: React.FC = () => {
   const [staffList, setStaffList] = useState<StaffDisplay[]>([]);
   const [selectedStaff, setSelectedStaff] = useState<StaffDisplay | null>(null);
   const [loading, setLoading] = useState(false);
-  const [viewTab, setViewTab] = useState<'profile' | 'history' | 'appeals' | 'loa_requests'>('profile');
+  const [viewTab, setViewTab] = useState<'profile' | 'history' | 'appeals' | 'loa_requests' | 'stats'>('profile');
   const [actionType, setActionType] = useState<string | null>(null);
   const [isSending, setIsSending] = useState(false);
   
@@ -190,6 +190,7 @@ const LoginPage: React.FC = () => {
   const [userLogs, setUserLogs] = useState<any[]>([]);
   const [appeals, setAppeals] = useState<any[]>([]);
   const [loaRequests, setLoaRequests] = useState<any[]>([]);
+  const [statsData, setStatsData] = useState({ bans: 0, mutes: 0, checks: 0, history: [] });
   const [actionReason, setActionReason] = useState('');
   const [warnCount, setWarnCount] = useState(1);
   const [searchQuery, setSearchQuery] = useState('');
@@ -344,6 +345,14 @@ const LoginPage: React.FC = () => {
           const data = await res.json();
           setUserLogs(data);
       } catch(e) { setUserLogs([]); }
+  };
+
+  const fetchStats = async (ign: string) => {
+      try {
+          const res = await fetch(`${API_URL}/stats/${ign}`);
+          const data = await res.json();
+          setStatsData(data);
+      } catch(e) { setStatsData({ bans: 0, mutes: 0, checks: 0, history: [] }); }
   };
 
   const fetchAppeals = async () => {
@@ -1057,6 +1066,13 @@ const LoginPage: React.FC = () => {
                                           >
                                               Логи
                                           </button>
+                                          <button 
+                                              onClick={() => { setViewTab('stats'); fetchStats(selectedStaff.minecraftNick || ''); }}
+                                              className={`px-6 py-3 rounded-xl text-xs font-bold uppercase tracking-wider transition-all border backdrop-blur-sm flex items-center gap-2 ${viewTab === 'stats' ? 'bg-white text-black border-white shadow-[0_0_20px_rgba(255,255,255,0.2)]' : 'bg-white/5 text-zinc-400 border-white/5 hover:bg-white/10'}`}
+                                          >
+                                              <BarChart3 className="w-3 h-3" />
+                                              Статистика
+                                          </button>
                                       </div>
                                   </div>
                               </div>
@@ -1162,6 +1178,75 @@ const LoginPage: React.FC = () => {
 
                               {/* RIGHT COL: INFO (Optional for future metrics) */}
                           </div>
+                      ) : viewTab === 'stats' ? (
+                        <div className="bg-[#0a0a0a] border border-white/5 rounded-3xl p-8 min-h-[500px]">
+                            <div className="flex items-center gap-3 mb-8">
+                                <BarChart3 className="w-5 h-5 text-purple-500" />
+                                <h3 className="text-lg font-bold uppercase tracking-tight">Статистика Сервера</h3>
+                            </div>
+
+                            {!selectedStaff.minecraftNick ? (
+                                <div className="p-8 bg-amber-900/10 border border-amber-500/20 rounded-2xl flex items-center gap-4 text-amber-500">
+                                    <AlertCircle className="w-6 h-6" />
+                                    <div>
+                                        <div className="font-bold">IGN не установлен</div>
+                                        <div className="text-xs opacity-70">Для отображения статистики из базы данных, необходимо установить Minecraft Nickname в профиле сотрудника.</div>
+                                    </div>
+                                </div>
+                            ) : (
+                                <>
+                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
+                                        <div className="bg-[#0f0f11] border border-white/10 p-6 rounded-2xl relative overflow-hidden group">
+                                            <div className="absolute right-0 top-0 p-3 opacity-10 group-hover:opacity-20 transition-opacity">
+                                                <Gavel className="w-20 h-20 text-red-500" />
+                                            </div>
+                                            <div className="text-zinc-500 text-xs font-bold uppercase tracking-wider mb-2">Всего Банов</div>
+                                            <div className="text-4xl font-black text-white">{statsData.bans}</div>
+                                            <div className="text-[10px] text-zinc-600 mt-2 font-mono">LITEBANS DB</div>
+                                        </div>
+                                        <div className="bg-[#0f0f11] border border-white/10 p-6 rounded-2xl relative overflow-hidden group">
+                                            <div className="absolute right-0 top-0 p-3 opacity-10 group-hover:opacity-20 transition-opacity">
+                                                <Volume2 className="w-20 h-20 text-blue-500" />
+                                            </div>
+                                            <div className="text-zinc-500 text-xs font-bold uppercase tracking-wider mb-2">Всего Мутов</div>
+                                            <div className="text-4xl font-black text-white">{statsData.mutes}</div>
+                                            <div className="text-[10px] text-zinc-600 mt-2 font-mono">LITEBANS DB</div>
+                                        </div>
+                                        <div className="bg-[#0f0f11] border border-white/10 p-6 rounded-2xl relative overflow-hidden group">
+                                            <div className="absolute right-0 top-0 p-3 opacity-10 group-hover:opacity-20 transition-opacity">
+                                                <FileSearch className="w-20 h-20 text-emerald-500" />
+                                            </div>
+                                            <div className="text-zinc-500 text-xs font-bold uppercase tracking-wider mb-2">Проверок</div>
+                                            <div className="text-4xl font-black text-white">{statsData.checks}</div>
+                                            <div className="text-[10px] text-zinc-600 mt-2 font-mono">CHECKS DB (PLACEHOLDER)</div>
+                                        </div>
+                                    </div>
+
+                                    <h4 className="text-sm font-bold text-zinc-400 uppercase tracking-widest mb-4">Последние наказания</h4>
+                                    <div className="space-y-2">
+                                        {statsData.history.length === 0 ? (
+                                            <div className="text-zinc-600 text-xs font-mono">Нет недавних записей</div>
+                                        ) : (
+                                            statsData.history.map((h: any, i) => (
+                                                <div key={i} className="bg-white/[0.02] border border-white/5 p-4 rounded-xl flex items-center justify-between">
+                                                    <div className="flex items-center gap-4">
+                                                        <div className={`p-2 rounded-lg ${h.type === 'ban' ? 'bg-red-500/10 text-red-500' : 'bg-blue-500/10 text-blue-500'}`}>
+                                                            {h.type === 'ban' ? <Gavel className="w-4 h-4"/> : <Volume2 className="w-4 h-4"/>}
+                                                        </div>
+                                                        <div>
+                                                            <div className="text-sm font-bold text-zinc-200">{h.reason}</div>
+                                                            <div className="text-[10px] text-zinc-500 font-mono">
+                                                                {new Date(parseInt(h.time)).toLocaleString()}
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            ))
+                                        )}
+                                    </div>
+                                </>
+                            )}
+                        </div>
                       ) : (
                           <div className="bg-[#0a0a0a] border border-white/5 rounded-3xl p-8 min-h-[500px]">
                               <div className="flex items-center gap-3 mb-8">

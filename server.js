@@ -1,6 +1,7 @@
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
+const mysql = require('mysql2/promise');
 const { Client, GatewayIntentBits, Partials, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, Events } = require('discord.js');
 
 const app = express();
@@ -9,6 +10,47 @@ const PORT = process.env.PORT || 4000;
 const GUILD_ID = process.env.GUILD_ID || '1458138848822431770'; 
 const LOG_CHANNEL_ID = '1458163321302945946'; 
 const STAFF_ROLE_ID = '1458158245700046901'; 
+
+// === DATABASE CONFIGURATION ===
+
+// 1. LiteBans Database (Bans & Mutes)
+const LITEBANS_DB_CONFIG = {
+    host: process.env.DB_HOST || 'panel.nullx.space',
+    user: process.env.DB_USER || 'u1_FAXro5fVCj',
+    password: process.env.DB_PASSWORD || 'Crd9BOkGxGz+lYwihN96Uu+T',
+    database: process.env.DB_NAME || 's1_litebans',
+    waitForConnections: true,
+    connectionLimit: 10,
+    queueLimit: 0
+};
+
+// 2. Checks Database (Placeholder / Empty for now)
+const CHECKS_DB_CONFIG = {
+    // Fill this in later when you have the Checks DB info
+    host: 'localhost', 
+    user: 'root',
+    password: '',
+    database: 'checks_db_placeholder',
+    waitForConnections: true,
+    connectionLimit: 10,
+    queueLimit: 0
+};
+
+// Initialize Pools
+let litebansPool = null;
+let checksPool = null;
+
+try {
+    litebansPool = mysql.createPool(LITEBANS_DB_CONFIG);
+    console.log("✅ LiteBans DB Pool Initialized");
+} catch (err) {
+    console.error("❌ LiteBans DB Config Error:", err.message);
+}
+
+// Checks pool is currently placeholder, uncomment when ready
+// try {
+//     checksPool = mysql.createPool(CHECKS_DB_CONFIG);
+// } catch (err) {}
 
 // Roles sorted from Lowest (0) to Highest (5)
 const RANK_ROLE_IDS = [
@@ -145,6 +187,65 @@ async function logActionToDiscord(action, targetUser, adminUser, reason, details
 }
 
 // === API Routes ===
+
+// --- STATS ENDPOINT ---
+app.get('/api/stats/:ign', async (req, res) => {
+    const ign = req.params.ign;
+    
+    // Default stats
+    let stats = {
+        bans: 0,
+        mutes: 0,
+        checks: 0, // Placeholder
+        history: [] // Recent punishments
+    };
+
+    if (!ign || ign === 'undefined' || !litebansPool) {
+        return res.json(stats);
+    }
+
+    try {
+        // 1. Fetch Bans Count
+        const [banRows] = await litebansPool.query(
+            'SELECT COUNT(*) as count FROM litebans_bans WHERE banned_by_name = ?', 
+            [ign]
+        );
+        stats.bans = banRows[0]?.count || 0;
+
+        // 2. Fetch Mutes Count
+        const [muteRows] = await litebansPool.query(
+            'SELECT COUNT(*) as count FROM litebans_mutes WHERE banned_by_name = ?', 
+            [ign]
+        );
+        stats.mutes = muteRows[0]?.count || 0;
+
+        // 3. Fetch Recent History (Union of bans and mutes, limit 5)
+        // Note: 'time' is usually a BIGINT in ms in litebans
+        const [historyRows] = await litebansPool.query(
+            `
+            (SELECT 'ban' as type, reason, time, until FROM litebans_bans WHERE banned_by_name = ? ORDER BY time DESC LIMIT 5)
+            UNION ALL
+            (SELECT 'mute' as type, reason, time, until FROM litebans_mutes WHERE banned_by_name = ? ORDER BY time DESC LIMIT 5)
+            ORDER BY time DESC LIMIT 5
+            `,
+            [ign, ign]
+        );
+        
+        stats.history = historyRows;
+
+        // 4. Fetch Checks (Placeholder - when checks DB is ready)
+        // if (checksPool) {
+        //    const [checkRows] = await checksPool.query('SELECT COUNT(*) as count FROM checks_table WHERE staff = ?', [ign]);
+        //    stats.checks = checkRows[0]?.count || 0;
+        // }
+
+    } catch (error) {
+        console.error(`[DB Error] Stats fetch for ${ign}:`, error);
+        // Don't crash response, just return what we have (or zeros)
+    }
+
+    res.json(stats);
+});
 
 app.get('/api/staff', async (req, res) => {
     if (!client.isReady()) return res.status(503).json({ error: "Bot starting..." });
