@@ -1259,10 +1259,10 @@ const LoginPage: React.FC = () => {
                                         </div>
                                     </div>
 
-                                    <h4 className="text-sm font-bold text-zinc-400 uppercase tracking-widest mb-4">Последние наказания</h4>
+                                    <h4 className="text-sm font-bold text-zinc-400 uppercase tracking-widest mb-4">История Наказаний</h4>
                                     <div className="space-y-2">
                                         {statsData.history.length === 0 ? (
-                                            <div className="text-zinc-600 text-xs font-mono">Нет недавних записей</div>
+                                            <div className="text-zinc-600 text-xs font-mono">Нет записей за выбранный период</div>
                                         ) : (
                                             statsData.history.map((h: any, i) => {
                                                 const startTime = parseInt(h.time);
@@ -1270,6 +1270,7 @@ const LoginPage: React.FC = () => {
                                                 const isPermanent = endTime <= 0;
                                                 const duration = isPermanent ? 'Навсегда' : formatDuration(endTime - startTime);
                                                 const expiresAt = isPermanent ? 'Никогда' : new Date(endTime).toLocaleString();
+                                                const isRemoved = h.removed_by_name !== null;
 
                                                 return (
                                                     <div key={i} className="bg-white/[0.02] border border-white/5 p-4 rounded-xl flex flex-col gap-2">
@@ -1288,14 +1289,23 @@ const LoginPage: React.FC = () => {
                                                         </div>
                                                         
                                                         <div className="flex items-center gap-4 text-[10px] font-mono text-zinc-400 pl-11">
-                                                            <div className="flex items-center gap-1.5 bg-white/5 px-2 py-1 rounded">
-                                                                <History className="w-3 h-3 text-zinc-500" />
-                                                                <span>Срок: <span className="text-zinc-300">{duration}</span></span>
-                                                            </div>
-                                                            <div className="flex items-center gap-1.5 bg-white/5 px-2 py-1 rounded">
-                                                                <Calendar className="w-3 h-3 text-zinc-500" />
-                                                                <span>Истекает: <span className="text-zinc-300">{expiresAt}</span></span>
-                                                            </div>
+                                                            {isRemoved ? (
+                                                                <div className="flex items-center gap-1.5 bg-emerald-500/10 px-2 py-1 rounded border border-emerald-500/20">
+                                                                    <Check className="w-3 h-3 text-emerald-500" />
+                                                                    <span className="text-emerald-400 font-bold uppercase">Снял: {h.removed_by_name}</span>
+                                                                </div>
+                                                            ) : (
+                                                                <>
+                                                                    <div className="flex items-center gap-1.5 bg-white/5 px-2 py-1 rounded">
+                                                                        <History className="w-3 h-3 text-zinc-500" />
+                                                                        <span>Срок: <span className="text-zinc-300">{duration}</span></span>
+                                                                    </div>
+                                                                    <div className="flex items-center gap-1.5 bg-white/5 px-2 py-1 rounded">
+                                                                        <Calendar className="w-3 h-3 text-zinc-500" />
+                                                                        <span>Истекает: <span className="text-zinc-300">{expiresAt}</span></span>
+                                                                    </div>
+                                                                </>
+                                                            )}
                                                         </div>
                                                     </div>
                                                 );

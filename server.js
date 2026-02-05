@@ -229,14 +229,14 @@ app.get('/api/stats/:ign', async (req, res) => {
         );
         stats.mutes = muteRows[0]?.count || 0;
 
-        // 3. Fetch Recent History (Union of bans and mutes, limit 5)
-        // We also filter history by time to match the range, although history usually implies "latest"
+        // 3. Fetch Recent History (Union of bans and mutes, NO LIMIT)
+        // Selecting removed_by_name to check if it was unbanned
         const [historyRows] = await litebansPool.query(
             `
-            (SELECT 'ban' as type, reason, time, until FROM litebans_bans WHERE banned_by_name = ? AND time >= ? ORDER BY time DESC LIMIT 5)
+            (SELECT 'ban' as type, reason, time, until, removed_by_name FROM litebans_bans WHERE banned_by_name = ? AND time >= ? ORDER BY time DESC)
             UNION ALL
-            (SELECT 'mute' as type, reason, time, until FROM litebans_mutes WHERE banned_by_name = ? AND time >= ? ORDER BY time DESC LIMIT 5)
-            ORDER BY time DESC LIMIT 5
+            (SELECT 'mute' as type, reason, time, until, removed_by_name FROM litebans_mutes WHERE banned_by_name = ? AND time >= ? ORDER BY time DESC)
+            ORDER BY time DESC
             `,
             [ign, cutoffTime, ign, cutoffTime]
         );
