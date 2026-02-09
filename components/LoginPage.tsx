@@ -221,6 +221,8 @@ const LoginPage: React.FC = () => {
   
   // Wallet State
   const [withdrawAmount, setWithdrawAmount] = useState<number>(0);
+  const [walletHistory, setWalletHistory] = useState<any[]>([]);
+  const [lastWithdrawTime, setLastWithdrawTime] = useState<number>(0);
   
   // Polling tracking
   const [lastLogCount, setLastLogCount] = useState(0);
@@ -382,6 +384,15 @@ const LoginPage: React.FC = () => {
           setStatsData(data);
       } catch(e) { setStatsData({ bans: 0, mutes: 0, checks: 0, playtimeSeconds: 0, history: [] }); }
   };
+
+  const fetchWalletHistory = async (userId: string) => {
+      try {
+          const res = await fetch(`${API_URL}/economy/history/${userId}`);
+          const data = await res.json();
+          setWalletHistory(data.logs);
+          setLastWithdrawTime(data.lastWithdraw);
+      } catch(e) { setWalletHistory([]); }
+  }
 
   const fetchAppeals = async () => {
       try {
@@ -597,12 +608,41 @@ const LoginPage: React.FC = () => {
               addToast('Успешно', data.message, 'success');
               setWithdrawAmount(0);
               fetchStaffList(user.id); // Refresh balance
+              fetchWalletHistory(selectedStaff.id);
           }
       } catch(e) {
           addToast('Ошибка', 'Не удалось выполнить запрос', 'error');
       } finally {
           setIsSending(false);
       }
+  };
+
+  const handleAdminEconomy = async (action: 'give' | 'take' | 'set') => {
+      if (!selectedStaff || !user || !isAdmin) return;
+      
+      const amount = parseInt(prompt(`Введите количество (${action.toUpperCase()}):`, '0') || '0');
+      if (amount <= 0) return;
+
+      try {
+          const res = await fetch(`${API_URL}/economy/manage`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ 
+                  adminId: user.id,
+                  targetId: selectedStaff.id,
+                  amount: amount,
+                  action: action
+              })
+          });
+          
+          if (res.ok) {
+              addToast('Успешно', 'Баланс обновлен', 'success');
+              fetchStaffList(user.id);
+              fetchWalletHistory(selectedStaff.id);
+          } else {
+              addToast('Ошибка', 'Не удалось обновить баланс', 'error');
+          }
+      } catch(e) { addToast('Ошибка', 'Сбой запроса', 'error'); }
   };
 
   const filteredStaff = staffList.filter(s => s.displayName.toLowerCase().includes(searchQuery.toLowerCase()));
@@ -1142,7 +1182,7 @@ const LoginPage: React.FC = () => {
                                           {/* WALLET BUTTON (Only for Self or Admin) */}
                                           {(selectedStaff.isCurrentUser || isAdmin) && (
                                               <button 
-                                                  onClick={() => setViewTab('wallet')}
+                                                  onClick={() => { setViewTab('wallet'); fetchWalletHistory(selectedStaff.id); }}
                                                   className={`px-6 py-3 rounded-xl text-xs font-bold uppercase tracking-wider transition-all border backdrop-blur-sm flex items-center gap-2 ${viewTab === 'wallet' ? 'bg-white text-black border-white shadow-[0_0_20px_rgba(255,255,255,0.2)]' : 'bg-white/5 text-zinc-400 border-white/5 hover:bg-white/10'}`}
                                               >
                                                   <Wallet className="w-3 h-3" />
@@ -1279,65 +1319,100 @@ const LoginPage: React.FC = () => {
                                     </div>
                                 </div>
 
-                                {/* WITHDRAW FORM */}
+                                {/* WITHDRAW / ADMIN FORM */}
                                 <div className="bg-[#0f0f11] border border-white/10 rounded-3xl p-8 flex flex-col justify-center">
-                                    <h4 className="text-sm font-bold text-white uppercase tracking-wider mb-6">Вывод средств</h4>
                                     
-                                    <div className="space-y-4">
-                                        <div>
-                                            <label className="text-[10px] font-bold text-zinc-500 uppercase block mb-2">Получатель (IGN)</label>
-                                            <div className="w-full bg-black/50 border border-white/10 p-4 rounded-xl text-sm text-zinc-300 font-mono flex items-center gap-3">
-                                                <Gamepad2 className="w-4 h-4 text-zinc-500" />
-                                                {selectedStaff.minecraftNick || <span className="text-red-500">Не установлен</span>}
+                                    {isAdmin && !selectedStaff.isCurrentUser ? (
+                                        // ADMIN MANAGEMENT PANEL
+                                        <div className="space-y-4">
+                                            <div className="flex items-center gap-2 mb-4 text-purple-400">
+                                                <Zap className="w-4 h-4" />
+                                                <h4 className="text-sm font-bold uppercase tracking-wider">Управление Балансом</h4>
                                             </div>
+                                            
+                                            <div className="grid grid-cols-3 gap-3">
+                                                <button onClick={() => handleAdminEconomy('give')} className="p-4 bg-emerald-900/20 hover:bg-emerald-900/40 border border-emerald-500/30 rounded-xl text-emerald-400 font-bold uppercase text-[10px] transition-all">Выдать</button>
+                                                <button onClick={() => handleAdminEconomy('take')} className="p-4 bg-red-900/20 hover:bg-red-900/40 border border-red-500/30 rounded-xl text-red-400 font-bold uppercase text-[10px] transition-all">Забрать</button>
+                                                <button onClick={() => handleAdminEconomy('set')} className="p-4 bg-blue-900/20 hover:bg-blue-900/40 border border-blue-500/30 rounded-xl text-blue-400 font-bold uppercase text-[10px] transition-all">Установить</button>
+                                            </div>
+                                            <div className="text-xs text-zinc-500 text-center mt-2">Все действия логируются</div>
                                         </div>
+                                    ) : (
+                                        // STANDARD WITHDRAW FORM
+                                        <>
+                                            <h4 className="text-sm font-bold text-white uppercase tracking-wider mb-6">Вывод средств</h4>
+                                            
+                                            <div className="space-y-4">
+                                                <div>
+                                                    <label className="text-[10px] font-bold text-zinc-500 uppercase block mb-2">Получатель (IGN)</label>
+                                                    <div className="w-full bg-black/50 border border-white/10 p-4 rounded-xl text-sm text-zinc-300 font-mono flex items-center gap-3">
+                                                        <Gamepad2 className="w-4 h-4 text-zinc-500" />
+                                                        {selectedStaff.minecraftNick || <span className="text-red-500">Не установлен</span>}
+                                                    </div>
+                                                </div>
 
-                                        <div>
-                                            <label className="text-[10px] font-bold text-zinc-500 uppercase block mb-2">Сумма (Аметрины)</label>
-                                            <input 
-                                                type="number" 
-                                                value={withdrawAmount}
-                                                onChange={(e) => setWithdrawAmount(parseInt(e.target.value))}
-                                                placeholder="0"
-                                                className="w-full bg-black border border-white/10 p-4 rounded-xl text-lg font-bold text-white outline-none focus:border-emerald-500 transition-colors"
-                                                min="1"
-                                                max={selectedStaff.balance}
-                                            />
-                                        </div>
+                                                <div>
+                                                    <label className="text-[10px] font-bold text-zinc-500 uppercase block mb-2">Сумма (Аметрины)</label>
+                                                    <input 
+                                                        type="number" 
+                                                        value={withdrawAmount}
+                                                        onChange={(e) => setWithdrawAmount(parseInt(e.target.value))}
+                                                        placeholder="0"
+                                                        className="w-full bg-black border border-white/10 p-4 rounded-xl text-lg font-bold text-white outline-none focus:border-emerald-500 transition-colors"
+                                                        min="1"
+                                                        max={selectedStaff.balance}
+                                                    />
+                                                </div>
 
-                                        <button 
-                                            onClick={handleWithdraw}
-                                            disabled={isSending || !selectedStaff.minecraftNick || withdrawAmount <= 0}
-                                            className="w-full py-4 bg-emerald-600 text-white font-black uppercase rounded-xl hover:bg-emerald-500 transition-colors disabled:opacity-50 disabled:cursor-not-allowed mt-2 text-xs tracking-widest shadow-[0_0_20px_rgba(16,185,129,0.2)]"
-                                        >
-                                            {isSending ? 'Обработка...' : 'Вывести на сервер'}
-                                        </button>
-                                    </div>
+                                                <button 
+                                                    onClick={handleWithdraw}
+                                                    disabled={isSending || !selectedStaff.minecraftNick || withdrawAmount <= 0 || (Date.now() - lastWithdrawTime < 86400000)}
+                                                    className="w-full py-4 bg-emerald-600 text-white font-black uppercase rounded-xl hover:bg-emerald-500 transition-colors disabled:opacity-50 disabled:cursor-not-allowed mt-2 text-xs tracking-widest shadow-[0_0_20px_rgba(16,185,129,0.2)]"
+                                                >
+                                                    {isSending ? 'Обработка...' : (Date.now() - lastWithdrawTime < 86400000) ? `КД до ${new Date(lastWithdrawTime + 86400000).toLocaleTimeString()}` : 'Вывести на сервер'}
+                                                </button>
+                                                {Date.now() - lastWithdrawTime < 86400000 && (
+                                                    <div className="text-center text-[10px] text-amber-500 font-bold uppercase tracking-wide animate-pulse">
+                                                        Вывод доступен раз в 24 часа
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </>
+                                    )}
                                 </div>
                             </div>
 
-                            {/* HISTORY MOCK */}
+                            {/* HISTORY */}
                             <div className="mt-8">
                                 <h4 className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-4">История операций</h4>
-                                <div className="space-y-2">
-                                    <div className="bg-white/[0.02] border border-white/5 p-4 rounded-xl flex items-center justify-between">
-                                        <div className="flex items-center gap-4">
-                                            <div className="p-2 bg-emerald-500/10 rounded-lg text-emerald-500"><ArrowUpCircle className="w-4 h-4"/></div>
-                                            <div>
-                                                <div className="text-sm font-bold text-zinc-200">Зачисление Зарплаты</div>
-                                                <div className="text-[10px] text-zinc-500 font-mono">Автоматически</div>
+                                <div className="space-y-2 max-h-60 overflow-y-auto custom-scrollbar pr-2">
+                                    {walletHistory.length === 0 ? (
+                                        <div className="bg-white/[0.02] border border-white/5 p-4 rounded-xl flex items-center justify-between opacity-50">
+                                            <div className="flex items-center gap-4">
+                                                <div className="p-2 bg-zinc-800 rounded-lg text-zinc-500"><Info className="w-4 h-4"/></div>
+                                                <div>
+                                                    <div className="text-sm font-bold text-zinc-400">Транзакций не найдено</div>
+                                                </div>
                                             </div>
                                         </div>
-                                        <div className="text-emerald-400 font-black">+1500 AMT</div>
-                                    </div>
-                                    <div className="bg-white/[0.02] border border-white/5 p-4 rounded-xl flex items-center justify-between opacity-50">
-                                        <div className="flex items-center gap-4">
-                                            <div className="p-2 bg-zinc-800 rounded-lg text-zinc-500"><Info className="w-4 h-4"/></div>
-                                            <div>
-                                                <div className="text-sm font-bold text-zinc-400">Нет других операций</div>
+                                    ) : (
+                                        walletHistory.map((log, idx) => (
+                                            <div key={idx} className="bg-white/[0.02] border border-white/5 p-4 rounded-xl flex items-center justify-between hover:bg-white/[0.04] transition-colors">
+                                                <div className="flex items-center gap-4">
+                                                    <div className={`p-2 rounded-lg ${log.amount > 0 ? 'bg-emerald-500/10 text-emerald-500' : 'bg-red-500/10 text-red-500'}`}>
+                                                        {log.amount > 0 ? <ArrowUpCircle className="w-4 h-4"/> : <ArrowDownCircle className="w-4 h-4"/>}
+                                                    </div>
+                                                    <div>
+                                                        <div className="text-sm font-bold text-zinc-200">{log.type}</div>
+                                                        <div className="text-[10px] text-zinc-500 font-mono">{new Date(log.date).toLocaleString()} • {log.details}</div>
+                                                    </div>
+                                                </div>
+                                                <div className={`font-black ${log.amount > 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                                                    {log.amount > 0 ? '+' : ''}{log.amount} AMT
+                                                </div>
                                             </div>
-                                        </div>
-                                    </div>
+                                        ))
+                                    )}
                                 </div>
                             </div>
                         </div>

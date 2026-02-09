@@ -29,7 +29,7 @@ const CHECKS_DB_CONFIG = {
     host: 'panel.nullx.space', 
     user: 'u1_McHWJLbCr4',
     password: 'J3K1qTw61BZpp!y.sbLrlpvt',
-    database: 's1_auth', // Предполагаемое имя БД. Если не работает, проверьте точное имя в панели.
+    database: 's1_logs', // Changed from s1_auth to s1_logs
     port: 3306,
     waitForConnections: true,
     connectionLimit: 10,
@@ -49,9 +49,9 @@ try {
 
 try {
     checksPool = mysql.createPool(CHECKS_DB_CONFIG);
-    console.log("✅ Checks/Auth DB Pool Initialized");
+    console.log("✅ Checks/Logs DB Pool Initialized");
 } catch (err) {
-    console.error("❌ Checks/Auth DB Config Error:", err.message);
+    console.error("❌ Checks/Logs DB Config Error:", err.message);
 }
 
 // Roles sorted from Lowest (0) to Highest (5)
@@ -64,6 +64,11 @@ const RANK_ROLE_IDS = [
     "1458277039399374991"  // Curator
 ];
 
+const ALLOWED_ADMIN_IDS = [
+    '802105175720460318', '440704669178789888', '591281053503848469',
+    '1455582084893642998', '846540575032344596', '1468330580910542868'
+];
+
 // === MOCK DATABASE (IN-MEMORY) ===
 const MOCK_DB = {
     logs: [], // { id, targetId, adminId, action, reason, date }
@@ -72,7 +77,9 @@ const MOCK_DB = {
     appeals: [], // { id, userId, warnId (optional), text, status: 'pending'|'approved'|'rejected', date }
     minecraftNicks: {}, // { userId: "Nickname" }
     banners: {}, // { userId: "https://image.url" }
-    balances: {} // { userId: amount } (Virtual salary)
+    balances: {}, // { userId: amount } (Virtual salary)
+    lastWithdraw: {}, // { userId: timestamp }
+    economyLogs: [] // { id, userId, executorId, type, amount, date, details }
 };
 
 app.use(cors({
@@ -203,13 +210,36 @@ app.post('/api/economy/withdraw', (req, res) => {
         return res.status(400).json({ error: "Missing parameters" });
     }
 
-    const currentBalance = MOCK_DB.balances[userId] || 5000;
+    // 1. Check Cooldown (24 hours)
+    const lastTime = MOCK_DB.lastWithdraw[userId] || 0;
+    const now = Date.now();
+    const COOLDOWN = 24 * 60 * 60 * 1000; // 24 hours in ms
+
+    if (now - lastTime < COOLDOWN) {
+        const remaining = Math.ceil((COOLDOWN - (now - lastTime)) / (1000 * 60 * 60));
+        return res.status(400).json({ error: `Вывод доступен через ${remaining} ч.` });
+    }
+
+    // 2. Check Balance
+    const currentBalance = MOCK_DB.balances[userId] || 0;
     if (amount > currentBalance) {
         return res.status(400).json({ error: "Недостаточно средств" });
     }
 
-    // Deduct mock balance
+    // 3. Deduct & Update
     MOCK_DB.balances[userId] = currentBalance - amount;
+    MOCK_DB.lastWithdraw[userId] = now;
+
+    // 4. Log
+    MOCK_DB.economyLogs.push({
+        id: Date.now().toString(),
+        userId,
+        executorId: userId, // Self
+        type: 'WITHDRAW',
+        amount: -amount,
+        date: new Date().toISOString(),
+        details: `Вывод на IGN: ${minecraftNick}`
+    });
 
     // TODO: Implement RCON command execution here
     // Example: await rcon.send(`eco give ${minecraftNick} ${amount}`);
@@ -220,6 +250,58 @@ app.post('/api/economy/withdraw', (req, res) => {
         newBalance: MOCK_DB.balances[userId],
         message: `Успешно выведено ${amount} Аметринов на аккаунт ${minecraftNick}` 
     });
+});
+
+// --- ECONOMY / ADMIN MANAGE ---
+app.post('/api/economy/manage', (req, res) => {
+    const { adminId, targetId, amount, action } = req.body; // action: 'give' | 'take' | 'set'
+
+    if (!ALLOWED_ADMIN_IDS.includes(adminId)) {
+        return res.status(403).json({ error: "Доступ запрещен" });
+    }
+
+    if (!MOCK_DB.balances[targetId]) MOCK_DB.balances[targetId] = 0;
+    
+    let oldBalance = MOCK_DB.balances[targetId];
+    let newBalance = oldBalance;
+    let logType = '';
+    let logAmount = 0;
+
+    if (action === 'give') {
+        newBalance = oldBalance + amount;
+        logType = 'ADMIN_GIVE';
+        logAmount = amount;
+    } else if (action === 'take') {
+        newBalance = Math.max(0, oldBalance - amount);
+        logType = 'ADMIN_TAKE';
+        logAmount = -amount;
+    } else if (action === 'set') {
+        newBalance = amount;
+        logType = 'ADMIN_SET';
+        logAmount = amount; // For SET, amount is the new absolute value
+    }
+
+    MOCK_DB.balances[targetId] = newBalance;
+
+    MOCK_DB.economyLogs.push({
+        id: Date.now().toString(),
+        userId: targetId,
+        executorId: adminId,
+        type: logType,
+        amount: logAmount,
+        date: new Date().toISOString(),
+        details: `Админ действие (${action})`
+    });
+
+    res.json({ success: true, newBalance });
+});
+
+app.get('/api/economy/history/:userId', (req, res) => {
+    const userId = req.params.userId;
+    // Filter logs where this user is the target
+    const logs = MOCK_DB.economyLogs.filter(l => l.userId === userId).reverse();
+    const lastWithdraw = MOCK_DB.lastWithdraw[userId] || 0;
+    res.json({ logs, lastWithdraw });
 });
 
 // --- STATS ENDPOINT ---
@@ -370,7 +452,7 @@ app.get('/api/staff', async (req, res) => {
 
             // Mock Balance Logic (Initialize if not present)
             if (MOCK_DB.balances[m.id] === undefined) {
-                MOCK_DB.balances[m.id] = Math.floor(Math.random() * 5000) + 1000;
+                MOCK_DB.balances[m.id] = 5000; // Starting balance
             }
 
             return {
