@@ -5,7 +5,7 @@ import {
     RefreshCw, ChevronLeft, ArrowUpCircle, 
     ArrowDownCircle, UserPlus, Trash2, Check, AlertTriangle, Eye,
     Send, X, Loader2, AlertCircle, History, User, Coffee, Sparkles, Volume2,
-    LayoutDashboard, Terminal, Activity, Zap, Shield, Calendar, FileText, Bell, PenSquare, Gamepad2, ShieldAlert, Image, Plane, Info, BarChart3, Gavel, FileSearch, Clock
+    LayoutDashboard, Terminal, Activity, Zap, Shield, Calendar, FileText, Bell, PenSquare, Gamepad2, ShieldAlert, Image, Plane, Info, BarChart3, Gavel, FileSearch, Clock, Wallet, Coins
 } from 'lucide-react';
 
 // ==========================================
@@ -89,6 +89,7 @@ interface StaffDisplay {
     minecraftNick: string | null;
     bannerUrl: string | null;
     warnCount: number;
+    balance?: number;
 }
 
 // Toast System Types
@@ -202,7 +203,7 @@ const LoginPage: React.FC = () => {
   const [staffList, setStaffList] = useState<StaffDisplay[]>([]);
   const [selectedStaff, setSelectedStaff] = useState<StaffDisplay | null>(null);
   const [loading, setLoading] = useState(false);
-  const [viewTab, setViewTab] = useState<'profile' | 'history' | 'appeals' | 'loa_requests' | 'stats'>('profile');
+  const [viewTab, setViewTab] = useState<'profile' | 'history' | 'appeals' | 'loa_requests' | 'stats' | 'wallet'>('profile');
   const [actionType, setActionType] = useState<string | null>(null);
   const [isSending, setIsSending] = useState(false);
   
@@ -217,6 +218,9 @@ const LoginPage: React.FC = () => {
   const [actionReason, setActionReason] = useState('');
   const [warnCount, setWarnCount] = useState(1);
   const [searchQuery, setSearchQuery] = useState('');
+  
+  // Wallet State
+  const [withdrawAmount, setWithdrawAmount] = useState<number>(0);
   
   // Polling tracking
   const [lastLogCount, setLastLogCount] = useState(0);
@@ -346,7 +350,8 @@ const LoginPage: React.FC = () => {
                  weight: bestRole.weight,
                  minecraftNick: m.minecraftNick,
                  bannerUrl: m.bannerUrl,
-                 warnCount: m.warnCount || 0
+                 warnCount: m.warnCount || 0,
+                 balance: m.balance || 0
              };
           }).sort((a: any, b: any) => b.weight - a.weight);
           
@@ -561,6 +566,44 @@ const LoginPage: React.FC = () => {
           addToast('Успешно', 'Вы вернулись из неактива', 'success');
       } catch(e) {}
   }
+
+  const handleWithdraw = async () => {
+      if (!selectedStaff || !user) return;
+      if (!selectedStaff.minecraftNick) {
+          addToast('Ошибка', 'Необходимо установить IGN (Minecraft) для вывода', 'error');
+          return;
+      }
+      if (withdrawAmount <= 0) {
+          addToast('Ошибка', 'Сумма должна быть больше 0', 'error');
+          return;
+      }
+
+      setIsSending(true);
+      try {
+          const res = await fetch(`${API_URL}/economy/withdraw`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ 
+                  userId: selectedStaff.id,
+                  amount: withdrawAmount,
+                  minecraftNick: selectedStaff.minecraftNick
+              })
+          });
+
+          const data = await res.json();
+          if (!res.ok) {
+              addToast('Ошибка', data.error || 'Ошибка вывода', 'error');
+          } else {
+              addToast('Успешно', data.message, 'success');
+              setWithdrawAmount(0);
+              fetchStaffList(user.id); // Refresh balance
+          }
+      } catch(e) {
+          addToast('Ошибка', 'Не удалось выполнить запрос', 'error');
+      } finally {
+          setIsSending(false);
+      }
+  };
 
   const filteredStaff = staffList.filter(s => s.displayName.toLowerCase().includes(searchQuery.toLowerCase()));
 
@@ -1096,6 +1139,16 @@ const LoginPage: React.FC = () => {
                                               <BarChart3 className="w-3 h-3" />
                                               Статистика
                                           </button>
+                                          {/* WALLET BUTTON (Only for Self or Admin) */}
+                                          {(selectedStaff.isCurrentUser || isAdmin) && (
+                                              <button 
+                                                  onClick={() => setViewTab('wallet')}
+                                                  className={`px-6 py-3 rounded-xl text-xs font-bold uppercase tracking-wider transition-all border backdrop-blur-sm flex items-center gap-2 ${viewTab === 'wallet' ? 'bg-white text-black border-white shadow-[0_0_20px_rgba(255,255,255,0.2)]' : 'bg-white/5 text-zinc-400 border-white/5 hover:bg-white/10'}`}
+                                              >
+                                                  <Wallet className="w-3 h-3" />
+                                                  Кошелек
+                                              </button>
+                                          )}
                                       </div>
                                   </div>
                               </div>
@@ -1201,6 +1254,93 @@ const LoginPage: React.FC = () => {
 
                               {/* RIGHT COL: INFO (Optional for future metrics) */}
                           </div>
+                      ) : viewTab === 'wallet' ? (
+                        <div className="bg-[#0a0a0a] border border-white/5 rounded-3xl p-8 min-h-[500px]">
+                            <div className="flex items-center gap-3 mb-8">
+                                <Wallet className="w-5 h-5 text-emerald-500" />
+                                <h3 className="text-lg font-bold uppercase tracking-tight">Личный Кошелек</h3>
+                            </div>
+
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                                {/* BALANCE CARD */}
+                                <div className="bg-gradient-to-br from-emerald-900/20 to-black border border-emerald-500/20 rounded-3xl p-8 relative overflow-hidden flex flex-col justify-between h-64 shadow-2xl">
+                                    <div className="absolute top-0 right-0 p-8 opacity-10">
+                                        <Coins className="w-32 h-32 text-emerald-500" />
+                                    </div>
+                                    <div>
+                                        <div className="text-zinc-400 text-xs font-bold uppercase tracking-widest mb-2">Текущий баланс</div>
+                                        <div className="text-5xl font-black text-white tracking-tight flex items-baseline gap-2">
+                                            {selectedStaff.balance} <span className="text-xl text-emerald-500">AMT</span>
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <div className="text-[10px] text-emerald-500/60 font-mono uppercase tracking-wider mb-1">Nullx Economy Network</div>
+                                        <div className="text-xs text-zinc-500">ID Транзакции: {Date.now().toString().slice(-8)}</div>
+                                    </div>
+                                </div>
+
+                                {/* WITHDRAW FORM */}
+                                <div className="bg-[#0f0f11] border border-white/10 rounded-3xl p-8 flex flex-col justify-center">
+                                    <h4 className="text-sm font-bold text-white uppercase tracking-wider mb-6">Вывод средств</h4>
+                                    
+                                    <div className="space-y-4">
+                                        <div>
+                                            <label className="text-[10px] font-bold text-zinc-500 uppercase block mb-2">Получатель (IGN)</label>
+                                            <div className="w-full bg-black/50 border border-white/10 p-4 rounded-xl text-sm text-zinc-300 font-mono flex items-center gap-3">
+                                                <Gamepad2 className="w-4 h-4 text-zinc-500" />
+                                                {selectedStaff.minecraftNick || <span className="text-red-500">Не установлен</span>}
+                                            </div>
+                                        </div>
+
+                                        <div>
+                                            <label className="text-[10px] font-bold text-zinc-500 uppercase block mb-2">Сумма (Аметрины)</label>
+                                            <input 
+                                                type="number" 
+                                                value={withdrawAmount}
+                                                onChange={(e) => setWithdrawAmount(parseInt(e.target.value))}
+                                                placeholder="0"
+                                                className="w-full bg-black border border-white/10 p-4 rounded-xl text-lg font-bold text-white outline-none focus:border-emerald-500 transition-colors"
+                                                min="1"
+                                                max={selectedStaff.balance}
+                                            />
+                                        </div>
+
+                                        <button 
+                                            onClick={handleWithdraw}
+                                            disabled={isSending || !selectedStaff.minecraftNick || withdrawAmount <= 0}
+                                            className="w-full py-4 bg-emerald-600 text-white font-black uppercase rounded-xl hover:bg-emerald-500 transition-colors disabled:opacity-50 disabled:cursor-not-allowed mt-2 text-xs tracking-widest shadow-[0_0_20px_rgba(16,185,129,0.2)]"
+                                        >
+                                            {isSending ? 'Обработка...' : 'Вывести на сервер'}
+                                        </button>
+                                    </div>
+                                </div>
+                            </div>
+
+                            {/* HISTORY MOCK */}
+                            <div className="mt-8">
+                                <h4 className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-4">История операций</h4>
+                                <div className="space-y-2">
+                                    <div className="bg-white/[0.02] border border-white/5 p-4 rounded-xl flex items-center justify-between">
+                                        <div className="flex items-center gap-4">
+                                            <div className="p-2 bg-emerald-500/10 rounded-lg text-emerald-500"><ArrowUpCircle className="w-4 h-4"/></div>
+                                            <div>
+                                                <div className="text-sm font-bold text-zinc-200">Зачисление Зарплаты</div>
+                                                <div className="text-[10px] text-zinc-500 font-mono">Автоматически</div>
+                                            </div>
+                                        </div>
+                                        <div className="text-emerald-400 font-black">+1500 AMT</div>
+                                    </div>
+                                    <div className="bg-white/[0.02] border border-white/5 p-4 rounded-xl flex items-center justify-between opacity-50">
+                                        <div className="flex items-center gap-4">
+                                            <div className="p-2 bg-zinc-800 rounded-lg text-zinc-500"><Info className="w-4 h-4"/></div>
+                                            <div>
+                                                <div className="text-sm font-bold text-zinc-400">Нет других операций</div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
                       ) : viewTab === 'stats' ? (
                         <div className="bg-[#0a0a0a] border border-white/5 rounded-3xl p-8 min-h-[500px]">
                             <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-8">

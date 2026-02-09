@@ -29,7 +29,7 @@ const CHECKS_DB_CONFIG = {
     host: 'panel.nullx.space', 
     user: 'u1_McHWJLbCr4',
     password: 'J3K1qTw61BZpp!y.sbLrlpvt',
-    database: 's1_logs', // Предполагаемое имя БД. Если не работает, проверьте точное имя в панели.
+    database: 's1_auth', // Предполагаемое имя БД. Если не работает, проверьте точное имя в панели.
     port: 3306,
     waitForConnections: true,
     connectionLimit: 10,
@@ -71,7 +71,8 @@ const MOCK_DB = {
     loaRequests: [], // { id, userId, username, duration, reason, date }
     appeals: [], // { id, userId, warnId (optional), text, status: 'pending'|'approved'|'rejected', date }
     minecraftNicks: {}, // { userId: "Nickname" }
-    banners: {} // { userId: "https://image.url" }
+    banners: {}, // { userId: "https://image.url" }
+    balances: {} // { userId: amount } (Virtual salary)
 };
 
 app.use(cors({
@@ -193,6 +194,33 @@ function formatDateForMySQL(date) {
 }
 
 // === API Routes ===
+
+// --- ECONOMY / WITHDRAWAL ---
+app.post('/api/economy/withdraw', (req, res) => {
+    const { userId, amount, minecraftNick } = req.body;
+    
+    if (!userId || !amount || !minecraftNick) {
+        return res.status(400).json({ error: "Missing parameters" });
+    }
+
+    const currentBalance = MOCK_DB.balances[userId] || 5000;
+    if (amount > currentBalance) {
+        return res.status(400).json({ error: "Недостаточно средств" });
+    }
+
+    // Deduct mock balance
+    MOCK_DB.balances[userId] = currentBalance - amount;
+
+    // TODO: Implement RCON command execution here
+    // Example: await rcon.send(`eco give ${minecraftNick} ${amount}`);
+    console.log(`[Economy] Withdrawal: ${amount} Ametrines to ${minecraftNick} (${userId})`);
+
+    res.json({ 
+        success: true, 
+        newBalance: MOCK_DB.balances[userId],
+        message: `Успешно выведено ${amount} Аметринов на аккаунт ${minecraftNick}` 
+    });
+});
 
 // --- STATS ENDPOINT ---
 app.get('/api/stats/:ign', async (req, res) => {
@@ -340,6 +368,11 @@ app.get('/api/staff', async (req, res) => {
             const unwarns = userLogs.filter(l => l.action === 'unwarn').length;
             const activeWarns = Math.max(0, warns - unwarns);
 
+            // Mock Balance Logic (Initialize if not present)
+            if (MOCK_DB.balances[m.id] === undefined) {
+                MOCK_DB.balances[m.id] = Math.floor(Math.random() * 5000) + 1000;
+            }
+
             return {
                 id: m.id,
                 username: m.user.username,
@@ -350,7 +383,8 @@ app.get('/api/staff', async (req, res) => {
                 loa: MOCK_DB.loa[m.id] || null,
                 minecraftNick: MOCK_DB.minecraftNicks[m.id] || null,
                 bannerUrl: MOCK_DB.banners[m.id] || null,
-                warnCount: activeWarns
+                warnCount: activeWarns,
+                balance: MOCK_DB.balances[m.id]
             };
         });
 
