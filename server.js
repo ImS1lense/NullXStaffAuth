@@ -29,7 +29,7 @@ const CHECKS_DB_CONFIG = {
     host: 'panel.nullx.space', 
     user: 'u1_McHWJLbCr4',
     password: 'J3K1qTw61BZpp!y.sbLrlpvt',
-    database: 's1_auth', // Предполагаемое имя БД. Если не работает, проверьте точное имя в панели.
+    database: 's1_logs', // Предполагаемое имя БД. Если не работает, проверьте точное имя в панели.
     port: 3306,
     waitForConnections: true,
     connectionLimit: 10,
