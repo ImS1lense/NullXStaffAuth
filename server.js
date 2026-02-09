@@ -24,13 +24,13 @@ const LITEBANS_DB_CONFIG = {
     queueLimit: 0
 };
 
-// 2. Checks Database (Placeholder / Empty for now)
+// 2. Checks & Online Database (ReviseLogs & OnlineLogs)
 const CHECKS_DB_CONFIG = {
-    // Fill this in later when you have the Checks DB info
-    host: 'localhost', 
-    user: 'root',
-    password: '',
-    database: 'checks_db_placeholder',
+    host: 'panel.nullx.space', 
+    user: 'u1_McHWJLbCr4',
+    password: 'J3K1qTw61BZpp!y.sbLrlpvt',
+    database: 's1_auth', // Предполагаемое имя БД. Если не работает, проверьте точное имя в панели.
+    port: 3306,
     waitForConnections: true,
     connectionLimit: 10,
     queueLimit: 0
@@ -47,10 +47,12 @@ try {
     console.error("❌ LiteBans DB Config Error:", err.message);
 }
 
-// Checks pool is currently placeholder, uncomment when ready
-// try {
-//     checksPool = mysql.createPool(CHECKS_DB_CONFIG);
-// } catch (err) {}
+try {
+    checksPool = mysql.createPool(CHECKS_DB_CONFIG);
+    console.log("✅ Checks/Auth DB Pool Initialized");
+} catch (err) {
+    console.error("❌ Checks/Auth DB Config Error:", err.message);
+}
 
 // Roles sorted from Lowest (0) to Highest (5)
 const RANK_ROLE_IDS = [
@@ -186,6 +188,10 @@ async function logActionToDiscord(action, targetUser, adminUser, reason, details
     } catch (e) { console.error("Log error:", e); }
 }
 
+function formatDateForMySQL(date) {
+    return date.toISOString().slice(0, 19).replace('T', ' ');
+}
+
 // === API Routes ===
 
 // --- STATS ENDPOINT ---
@@ -197,61 +203,119 @@ app.get('/api/stats/:ign', async (req, res) => {
     let stats = {
         bans: 0,
         mutes: 0,
-        checks: 0, // Placeholder
-        history: [] // Recent punishments
+        checks: 0, 
+        playtimeSeconds: 0,
+        history: [] 
     };
 
-    if (!ign || ign === 'undefined' || !litebansPool) {
+    if (!ign || ign === 'undefined') {
         return res.json(stats);
     }
 
     try {
         let cutoffTime = 0;
+        let dateObj = new Date(0); // Epoch for 'all'
         const now = Date.now();
 
         if (range === 'week') {
             cutoffTime = now - (7 * 24 * 60 * 60 * 1000);
+            dateObj = new Date(cutoffTime);
         } else if (range === 'month') {
             cutoffTime = now - (30 * 24 * 60 * 60 * 1000);
+            dateObj = new Date(cutoffTime);
+        }
+        
+        const mysqlDateString = formatDateForMySQL(dateObj); // Format: 'YYYY-MM-DD HH:mm:ss'
+
+        // --- LITEBANS QUERIES ---
+        if (litebansPool) {
+            // 1. Bans Count
+            const [banRows] = await litebansPool.query(
+                'SELECT COUNT(*) as count FROM litebans_bans WHERE banned_by_name = ? AND time >= ?', 
+                [ign, cutoffTime]
+            );
+            stats.bans = banRows[0]?.count || 0;
+
+            // 2. Mutes Count
+            const [muteRows] = await litebansPool.query(
+                'SELECT COUNT(*) as count FROM litebans_mutes WHERE banned_by_name = ? AND time >= ?', 
+                [ign, cutoffTime]
+            );
+            stats.mutes = muteRows[0]?.count || 0;
         }
 
-        // 1. Fetch Bans Count
-        const [banRows] = await litebansPool.query(
-            'SELECT COUNT(*) as count FROM litebans_bans WHERE banned_by_name = ? AND time >= ?', 
-            [ign, cutoffTime]
-        );
-        stats.bans = banRows[0]?.count || 0;
+        // --- CHECKS & ONLINE QUERIES ---
+        if (checksPool) {
+            // 3. Checks Count (revise_logs)
+            // Table: revise_logs (id, date, admin, target, type)
+            const [checkCountRows] = await checksPool.query(
+                'SELECT COUNT(*) as count FROM revise_logs WHERE admin = ? AND date >= ?',
+                [ign, mysqlDateString]
+            );
+            stats.checks = checkCountRows[0]?.count || 0;
 
-        // 2. Fetch Mutes Count
-        const [muteRows] = await litebansPool.query(
-            'SELECT COUNT(*) as count FROM litebans_mutes WHERE banned_by_name = ? AND time >= ?', 
-            [ign, cutoffTime]
-        );
-        stats.mutes = muteRows[0]?.count || 0;
+            // 4. Playtime (online_logs)
+            // Table: online_logs (id, player, enterDate, exitDate, ...)
+            // We sum the difference in seconds
+            const [playtimeRows] = await checksPool.query(
+                `SELECT SUM(TIMESTAMPDIFF(SECOND, enterDate, exitDate)) as total_seconds 
+                 FROM online_logs 
+                 WHERE player = ? 
+                 AND enterDate >= ? 
+                 AND exitDate IS NOT NULL`,
+                [ign, mysqlDateString]
+            );
+            stats.playtimeSeconds = parseInt(playtimeRows[0]?.total_seconds || 0);
+        }
 
-        // 3. Fetch Recent History (Union of bans and mutes, NO LIMIT)
-        // Selecting removed_by_name to check if it was unbanned
-        const [historyRows] = await litebansPool.query(
-            `
-            (SELECT 'ban' as type, reason, time, until, removed_by_name FROM litebans_bans WHERE banned_by_name = ? AND time >= ? ORDER BY time DESC)
-            UNION ALL
-            (SELECT 'mute' as type, reason, time, until, removed_by_name FROM litebans_mutes WHERE banned_by_name = ? AND time >= ? ORDER BY time DESC)
-            ORDER BY time DESC
-            `,
-            [ign, cutoffTime, ign, cutoffTime]
-        );
+        // --- HISTORY MERGING ---
+        let litebansHistory = [];
+        let checksHistory = [];
+
+        if (litebansPool) {
+            const [lbRows] = await litebansPool.query(
+                `
+                (SELECT 'ban' as type, reason, time, until, removed_by_name, banned_by_name as admin, NULL as target FROM litebans_bans WHERE banned_by_name = ? AND time >= ? ORDER BY time DESC)
+                UNION ALL
+                (SELECT 'mute' as type, reason, time, until, removed_by_name, banned_by_name as admin, NULL as target FROM litebans_mutes WHERE banned_by_name = ? AND time >= ? ORDER BY time DESC)
+                ORDER BY time DESC
+                `,
+                [ign, cutoffTime, ign, cutoffTime]
+            );
+            litebansHistory = lbRows.map(r => ({
+                ...r,
+                dateObj: new Date(parseInt(r.time)), // Convert bigInt ms to Date object
+                displayType: r.type.toUpperCase()
+            }));
+        }
+
+        if (checksPool) {
+            const [checkRows] = await checksPool.query(
+                'SELECT id, date, admin, target, type FROM revise_logs WHERE admin = ? AND date >= ? ORDER BY date DESC',
+                [ign, mysqlDateString]
+            );
+            checksHistory = checkRows.map(r => ({
+                type: 'CHECK',
+                displayType: r.type, // e.g., ANYDESK, DISCORD
+                reason: 'Проверка на читы',
+                time: new Date(r.date).getTime(), // Convert DateTime to ms
+                dateObj: new Date(r.date),
+                target: r.target,
+                admin: r.admin,
+                removed_by_name: null,
+                until: 0
+            }));
+        }
+
+        // Merge and Sort
+        const combinedHistory = [...litebansHistory, ...checksHistory];
+        combinedHistory.sort((a, b) => b.dateObj - a.dateObj);
         
-        stats.history = historyRows;
-
-        // 4. Fetch Checks (Placeholder - when checks DB is ready)
-        // if (checksPool) {
-        //    const [checkRows] = await checksPool.query('SELECT COUNT(*) as count FROM checks_table WHERE staff = ? AND time >= ?', [ign, cutoffTime]);
-        //    stats.checks = checkRows[0]?.count || 0;
-        // }
+        stats.history = combinedHistory;
 
     } catch (error) {
         console.error(`[DB Error] Stats fetch for ${ign}:`, error);
-        // Don't crash response, just return what we have (or zeros)
+        // Return partial stats if something fails
     }
 
     res.json(stats);

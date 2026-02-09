@@ -186,6 +186,14 @@ const formatDuration = (ms: number) => {
     return `${seconds}с`;
 };
 
+// Helper: Format seconds to Hours Mins
+const formatSecondsToHours = (totalSeconds: number) => {
+    if (totalSeconds <= 0) return '0ч 0м';
+    const hours = Math.floor(totalSeconds / 3600);
+    const minutes = Math.floor((totalSeconds % 3600) / 60);
+    return `${hours}ч ${minutes}м`;
+};
+
 const LoginPage: React.FC = () => {
   // Auth State
   const [authStep, setAuthStep] = useState<'login' | 'dashboard'>('login');
@@ -204,7 +212,7 @@ const LoginPage: React.FC = () => {
   const [userLogs, setUserLogs] = useState<any[]>([]);
   const [appeals, setAppeals] = useState<any[]>([]);
   const [loaRequests, setLoaRequests] = useState<any[]>([]);
-  const [statsData, setStatsData] = useState({ bans: 0, mutes: 0, checks: 0, history: [] });
+  const [statsData, setStatsData] = useState({ bans: 0, mutes: 0, checks: 0, playtimeSeconds: 0, history: [] });
   const [statsRange, setStatsRange] = useState<'all' | 'month' | 'week'>('all');
   const [actionReason, setActionReason] = useState('');
   const [warnCount, setWarnCount] = useState(1);
@@ -367,7 +375,7 @@ const LoginPage: React.FC = () => {
           const res = await fetch(`${API_URL}/stats/${ign}?range=${range}`);
           const data = await res.json();
           setStatsData(data);
-      } catch(e) { setStatsData({ bans: 0, mutes: 0, checks: 0, history: [] }); }
+      } catch(e) { setStatsData({ bans: 0, mutes: 0, checks: 0, playtimeSeconds: 0, history: [] }); }
   };
 
   const fetchAppeals = async () => {
@@ -1232,39 +1240,74 @@ const LoginPage: React.FC = () => {
                                 </div>
                             ) : (
                                 <>
-                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-6 mb-8">
-                                        <div className="bg-[#0f0f11] border border-white/10 p-6 rounded-2xl relative overflow-hidden group">
-                                            <div className="absolute right-0 top-0 p-3 opacity-10 group-hover:opacity-20 transition-opacity">
-                                                <Gavel className="w-20 h-20 text-red-500" />
-                                            </div>
-                                            <div className="text-zinc-500 text-xs font-bold uppercase tracking-wider mb-2">Всего Банов</div>
-                                            <div className="text-4xl font-black text-white">{statsData.bans}</div>
-                                            <div className="text-[10px] text-zinc-600 mt-2 font-mono">LITEBANS DB</div>
+                                    <div className="grid grid-cols-2 md:grid-cols-4 gap-6 mb-8">
+                                        {/* BANS CARD */}
+                                        <div className="bg-[#0f0f11] border border-white/10 p-6 rounded-2xl relative overflow-hidden group flex flex-col items-center justify-center text-center">
+                                            <div className="absolute inset-0 bg-red-500/5 group-hover:bg-red-500/10 transition-colors"></div>
+                                            <Gavel className="w-8 h-8 text-red-500 mb-3" />
+                                            <div className="text-4xl font-black text-white mb-1">{statsData.bans}</div>
+                                            <div className="text-zinc-500 text-[10px] font-bold uppercase tracking-wider">Всего Банов</div>
                                         </div>
-                                        <div className="bg-[#0f0f11] border border-white/10 p-6 rounded-2xl relative overflow-hidden group">
-                                            <div className="absolute right-0 top-0 p-3 opacity-10 group-hover:opacity-20 transition-opacity">
-                                                <Volume2 className="w-20 h-20 text-blue-500" />
-                                            </div>
-                                            <div className="text-zinc-500 text-xs font-bold uppercase tracking-wider mb-2">Всего Мутов</div>
-                                            <div className="text-4xl font-black text-white">{statsData.mutes}</div>
-                                            <div className="text-[10px] text-zinc-600 mt-2 font-mono">LITEBANS DB</div>
+
+                                        {/* MUTES CARD */}
+                                        <div className="bg-[#0f0f11] border border-white/10 p-6 rounded-2xl relative overflow-hidden group flex flex-col items-center justify-center text-center">
+                                            <div className="absolute inset-0 bg-blue-500/5 group-hover:bg-blue-500/10 transition-colors"></div>
+                                            <Volume2 className="w-8 h-8 text-blue-500 mb-3" />
+                                            <div className="text-4xl font-black text-white mb-1">{statsData.mutes}</div>
+                                            <div className="text-zinc-500 text-[10px] font-bold uppercase tracking-wider">Всего Мутов</div>
                                         </div>
-                                        <div className="bg-[#0f0f11] border border-white/10 p-6 rounded-2xl relative overflow-hidden group">
-                                            <div className="absolute right-0 top-0 p-3 opacity-10 group-hover:opacity-20 transition-opacity">
-                                                <FileSearch className="w-20 h-20 text-emerald-500" />
-                                            </div>
-                                            <div className="text-zinc-500 text-xs font-bold uppercase tracking-wider mb-2">Проверок</div>
-                                            <div className="text-4xl font-black text-white">{statsData.checks}</div>
-                                            <div className="text-[10px] text-zinc-600 mt-2 font-mono">CHECKS DB (PLACEHOLDER)</div>
+
+                                        {/* CHECKS CARD */}
+                                        <div className="bg-[#0f0f11] border border-white/10 p-6 rounded-2xl relative overflow-hidden group flex flex-col items-center justify-center text-center">
+                                            <div className="absolute inset-0 bg-cyan-500/5 group-hover:bg-cyan-500/10 transition-colors"></div>
+                                            <FileSearch className="w-8 h-8 text-cyan-500 mb-3" />
+                                            <div className="text-4xl font-black text-white mb-1">{statsData.checks}</div>
+                                            <div className="text-zinc-500 text-[10px] font-bold uppercase tracking-wider">Проверок</div>
+                                        </div>
+
+                                        {/* PLAYTIME CARD */}
+                                        <div className="bg-[#0f0f11] border border-white/10 p-6 rounded-2xl relative overflow-hidden group flex flex-col items-center justify-center text-center">
+                                            <div className="absolute inset-0 bg-amber-500/5 group-hover:bg-amber-500/10 transition-colors"></div>
+                                            <Clock className="w-8 h-8 text-amber-500 mb-3" />
+                                            <div className="text-2xl font-black text-white mb-1">{formatSecondsToHours(statsData.playtimeSeconds)}</div>
+                                            <div className="text-zinc-500 text-[10px] font-bold uppercase tracking-wider">Онлайн</div>
                                         </div>
                                     </div>
 
-                                    <h4 className="text-sm font-bold text-zinc-400 uppercase tracking-widest mb-4">История Наказаний</h4>
+                                    <h4 className="text-sm font-bold text-zinc-400 uppercase tracking-widest mb-4">История Наказаний и Проверок</h4>
                                     <div className="space-y-2">
                                         {statsData.history.length === 0 ? (
                                             <div className="text-zinc-600 text-xs font-mono">Нет записей за выбранный период</div>
                                         ) : (
                                             statsData.history.map((h: any, i) => {
+                                                // Common
+                                                const dateStr = new Date(h.time).toLocaleString();
+
+                                                if (h.type === 'CHECK') {
+                                                    return (
+                                                        <div key={i} className="bg-cyan-900/10 border border-cyan-500/20 p-4 rounded-xl flex flex-col gap-2 relative group hover:bg-cyan-900/20 transition-colors">
+                                                            <div className="absolute left-0 top-0 bottom-0 w-1 bg-cyan-500 rounded-l-xl"></div>
+                                                            <div className="flex items-center justify-between">
+                                                                <div className="flex items-center gap-3">
+                                                                    <div className="p-2 rounded-lg bg-cyan-500/20 text-cyan-400">
+                                                                        <FileSearch className="w-4 h-4"/>
+                                                                    </div>
+                                                                    <div>
+                                                                        <div className="text-sm font-bold text-zinc-200">Проверка игрока <span className="text-white">{h.target}</span></div>
+                                                                        <div className="text-[10px] text-zinc-500 font-mono">
+                                                                            Проведен: {dateStr}
+                                                                        </div>
+                                                                    </div>
+                                                                </div>
+                                                                <div className="px-3 py-1 rounded bg-black/40 border border-white/10 text-[10px] font-bold uppercase text-cyan-300">
+                                                                    {h.displayType}
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                    );
+                                                }
+
+                                                // Ban/Mute Logic
                                                 const startTime = parseInt(h.time);
                                                 const endTime = parseInt(h.until);
                                                 const isPermanent = endTime <= 0;
