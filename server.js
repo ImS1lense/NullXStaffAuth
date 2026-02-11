@@ -13,6 +13,7 @@ const STAFF_ROLE_ID = '1458158245700046901';
 
 // === DATABASE CONFIGURATION ===
 
+// 1. LiteBans Database (Bans & Mutes)
 const LITEBANS_DB_CONFIG = {
     host: process.env.DB_HOST || 'panel.nullx.space',
     user: process.env.DB_USER || 'u1_FAXro5fVCj',
@@ -23,17 +24,19 @@ const LITEBANS_DB_CONFIG = {
     queueLimit: 0
 };
 
+// 2. Checks & Online Database (ReviseLogs & OnlineLogs)
 const CHECKS_DB_CONFIG = {
     host: 'panel.nullx.space', 
     user: 'u1_McHWJLbCr4',
     password: 'J3K1qTw61BZpp!y.sbLrlpvt',
-    database: 's1_logs', 
+    database: 's1_logs', // Changed from s1_auth to s1_logs
     port: 3306,
     waitForConnections: true,
     connectionLimit: 10,
     queueLimit: 0
 };
 
+// Initialize Pools
 let litebansPool = null;
 let checksPool = null;
 
@@ -51,6 +54,7 @@ try {
     console.error("❌ Checks/Logs DB Config Error:", err.message);
 }
 
+// Roles sorted from Lowest (0) to Highest (5)
 const RANK_ROLE_IDS = [
     "1459285694458626222", // Trainee
     "1458158059187732666", // Jr. Mod
@@ -65,16 +69,17 @@ const ALLOWED_ADMIN_IDS = [
     '1455582084893642998', '846540575032344596', '1468330580910542868'
 ];
 
+// === MOCK DATABASE (IN-MEMORY) ===
 const MOCK_DB = {
-    logs: [],
-    loa: {},
-    loaRequests: [],
-    appeals: [],
-    minecraftNicks: {},
-    banners: {},
-    balances: {},
-    lastWithdraw: {},
-    economyLogs: [] // { id, userId, executorId, type, amount, date, details, source }
+    logs: [], // { id, targetId, adminId, action, reason, date }
+    loa: {},   // { userId: { start: timestamp, end: timestamp, active: boolean, reason: string } }
+    loaRequests: [], // { id, userId, username, duration, reason, date }
+    appeals: [], // { id, userId, warnId (optional), text, status: 'pending'|'approved'|'rejected', date }
+    minecraftNicks: {}, // { userId: "Nickname" }
+    banners: {}, // { userId: "https://image.url" }
+    balances: {}, // { userId: amount } (Virtual salary)
+    lastWithdraw: {}, // { userId: timestamp }
+    economyLogs: [] // { id, userId, executorId, type, amount, date, details }
 };
 
 app.use(cors({
@@ -110,6 +115,7 @@ client.once('ready', () => {
     console.log(`✅ Bot ready: ${client.user.tag}`);
 });
 
+// === INTERACTION HANDLER FOR EXCUSES ===
 client.on(Events.InteractionCreate, async interaction => {
     try {
         if (interaction.isButton()) {
@@ -134,6 +140,8 @@ client.on(Events.InteractionCreate, async interaction => {
         else if (interaction.isModalSubmit()) {
             if (interaction.customId === 'excuse_modal') {
                 const reason = interaction.fields.getTextInputValue('excuse_reason');
+                
+                // Save to DB
                 const appealObj = {
                     id: Date.now().toString(),
                     userId: interaction.user.id,
@@ -143,7 +151,10 @@ client.on(Events.InteractionCreate, async interaction => {
                     date: new Date().toISOString()
                 };
                 MOCK_DB.appeals.push(appealObj);
+
                 await interaction.reply({ content: '✅ Ваша объяснительная отправлена руководству. Ожидайте решения.', ephemeral: true });
+
+                // Log to Discord Channel
                 const channel = await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
                 if (channel) {
                     const embed = new EmbedBuilder()
@@ -167,7 +178,9 @@ async function logActionToDiscord(action, targetUser, adminUser, reason, details
     try {
         const channel = await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
         if (!channel) return;
+
         const colorMap = { promote: 0x34D399, demote: 0xF97316, kick: 0xEF4444, warn: 0xEAB308, unwarn: 0x6366F1, hire: 0x3B82F6, loa: 0x9333EA };
+
         const embed = new EmbedBuilder()
             .setTitle(`ACTION: ${action.toUpperCase()}`)
             .setColor(colorMap[action] || 0x808080)
@@ -178,6 +191,7 @@ async function logActionToDiscord(action, targetUser, adminUser, reason, details
                 { name: 'Details', value: details || 'None' }
             )
             .setTimestamp();
+
         await channel.send({ embeds: [embed] });
     } catch (e) { console.error("Log error:", e); }
 }
@@ -188,100 +202,95 @@ function formatDateForMySQL(date) {
 
 // === API Routes ===
 
-app.post('/api/economy/withdraw', async (req, res) => {
+// --- ECONOMY / WITHDRAWAL ---
+app.post('/api/economy/withdraw', (req, res) => {
     const { userId, amount, minecraftNick } = req.body;
-    if (!userId || !amount || !minecraftNick) return res.status(400).json({ error: "Missing parameters" });
+    
+    if (!userId || !amount || !minecraftNick) {
+        return res.status(400).json({ error: "Missing parameters" });
+    }
 
+    // 1. Check Cooldown (24 hours)
     const lastTime = MOCK_DB.lastWithdraw[userId] || 0;
     const now = Date.now();
-    const COOLDOWN = 24 * 60 * 60 * 1000;
+    const COOLDOWN = 24 * 60 * 60 * 1000; // 24 hours in ms
 
     if (now - lastTime < COOLDOWN) {
         const remaining = Math.ceil((COOLDOWN - (now - lastTime)) / (1000 * 60 * 60));
         return res.status(400).json({ error: `Вывод доступен через ${remaining} ч.` });
     }
 
+    // 2. Check Balance
     const currentBalance = MOCK_DB.balances[userId] || 0;
-    if (amount > currentBalance) return res.status(400).json({ error: "Недостаточно средств" });
-
-    // Проверка подключения к БД для выдачи
-    if (!checksPool) {
-         return res.status(503).json({ error: "Ошибка подключения к серверу выдачи" });
+    if (amount > currentBalance) {
+        return res.status(400).json({ error: "Недостаточно средств" });
     }
 
-    try {
-        // Оптимистичное списание
-        MOCK_DB.balances[userId] = currentBalance - amount;
-        MOCK_DB.lastWithdraw[userId] = now;
+    // 3. Deduct & Update
+    MOCK_DB.balances[userId] = currentBalance - amount;
+    MOCK_DB.lastWithdraw[userId] = now;
 
-        // Выполнение команды на сервере через БД
-        const command = `p give ${minecraftNick} ${amount}`;
-        await checksPool.query('INSERT INTO commands (command) VALUES (?)', [command]);
+    // 4. Log
+    MOCK_DB.economyLogs.push({
+        id: Date.now().toString(),
+        userId,
+        executorId: userId, // Self
+        type: 'WITHDRAW',
+        amount: -amount,
+        date: new Date().toISOString(),
+        details: `Вывод на IGN: ${minecraftNick}`
+    });
 
-        MOCK_DB.economyLogs.push({
-            id: Date.now().toString(),
-            userId,
-            executorId: userId,
-            type: 'WITHDRAW',
-            amount: -amount,
-            date: new Date().toISOString(),
-            details: `Вывод на игровой аккаунт ${minecraftNick}`,
-            source: 'Личный кабинет'
-        });
+    // TODO: Implement RCON command execution here
+    // Example: await rcon.send(`eco give ${minecraftNick} ${amount}`);
+    console.log(`[Economy] Withdrawal: ${amount} Ametrines to ${minecraftNick} (${userId})`);
 
-        console.log(`[Economy] Withdrawal success: ${amount} to ${minecraftNick} (Cmd: ${command})`);
-
-        res.json({ 
-            success: true, 
-            newBalance: MOCK_DB.balances[userId],
-            message: `Успешно выведено ${amount} Аметринов на аккаунт ${minecraftNick}` 
-        });
-
-    } catch (error) {
-        console.error("[Economy] Withdraw DB Error:", error);
-        // Возврат средств при ошибке
-        MOCK_DB.balances[userId] = currentBalance;
-        MOCK_DB.lastWithdraw[userId] = lastTime; 
-        
-        res.status(500).json({ error: "Ошибка базы данных. Средства возвращены." });
-    }
+    res.json({ 
+        success: true, 
+        newBalance: MOCK_DB.balances[userId],
+        message: `Успешно выведено ${amount} Аметринов на аккаунт ${minecraftNick}` 
+    });
 });
 
+// --- ECONOMY / ADMIN MANAGE ---
 app.post('/api/economy/manage', (req, res) => {
-    const { adminId, targetId, amount, action } = req.body; 
+    const { adminId, targetId, amount, action } = req.body; // action: 'give' | 'take' | 'set'
 
-    if (!ALLOWED_ADMIN_IDS.includes(adminId)) return res.status(403).json({ error: "Доступ запрещен" });
+    if (!ALLOWED_ADMIN_IDS.includes(adminId)) {
+        return res.status(403).json({ error: "Доступ запрещен" });
+    }
+
     if (!MOCK_DB.balances[targetId]) MOCK_DB.balances[targetId] = 0;
     
     let oldBalance = MOCK_DB.balances[targetId];
     let newBalance = oldBalance;
-    let logType = 'INCOME';
-    let source = 'Администрация';
+    let logType = '';
+    let logAmount = 0;
 
     if (action === 'give') {
         newBalance = oldBalance + amount;
-        logType = 'INCOME';
-        source = 'Пополнение счета (Зарплата)';
+        logType = 'ADMIN_GIVE';
+        logAmount = amount;
     } else if (action === 'take') {
         newBalance = Math.max(0, oldBalance - amount);
-        logType = 'WITHDRAW';
-        source = 'Списание средств (Штраф)';
+        logType = 'ADMIN_TAKE';
+        logAmount = -amount;
     } else if (action === 'set') {
         newBalance = amount;
-        logType = 'INCOME';
-        source = 'Корректировка баланса';
+        logType = 'ADMIN_SET';
+        logAmount = amount; // For SET, amount is the new absolute value
     }
 
     MOCK_DB.balances[targetId] = newBalance;
+
     MOCK_DB.economyLogs.push({
         id: Date.now().toString(),
         userId: targetId,
         executorId: adminId,
         type: logType,
-        amount: action === 'take' ? -amount : amount,
+        amount: logAmount,
         date: new Date().toISOString(),
-        details: `Действие администратора`,
-        source: source
+        details: `Админ действие (${action})`
     });
 
     res.json({ success: true, newBalance });
@@ -289,96 +298,219 @@ app.post('/api/economy/manage', (req, res) => {
 
 app.get('/api/economy/history/:userId', (req, res) => {
     const userId = req.params.userId;
+    // Filter logs where this user is the target
     const logs = MOCK_DB.economyLogs.filter(l => l.userId === userId).reverse();
     const lastWithdraw = MOCK_DB.lastWithdraw[userId] || 0;
     res.json({ logs, lastWithdraw });
 });
 
+// --- STATS ENDPOINT ---
 app.get('/api/stats/:ign', async (req, res) => {
     const ign = req.params.ign;
-    const range = req.query.range || 'all';
-    let stats = { bans: 0, mutes: 0, checks: 0, playtimeSeconds: 0, history: [] };
-    if (!ign || ign === 'undefined') return res.json(stats);
+    const range = req.query.range || 'all'; // 'week', 'month', 'all'
+    
+    // Default stats
+    let stats = {
+        bans: 0,
+        mutes: 0,
+        checks: 0, 
+        playtimeSeconds: 0,
+        history: [] 
+    };
+
+    if (!ign || ign === 'undefined') {
+        return res.json(stats);
+    }
 
     try {
         let cutoffTime = 0;
-        let dateObj = new Date(0); 
+        let dateObj = new Date(0); // Epoch for 'all'
         const now = Date.now();
-        if (range === 'week') { cutoffTime = now - (7 * 24 * 60 * 60 * 1000); dateObj = new Date(cutoffTime); }
-        else if (range === 'month') { cutoffTime = now - (30 * 24 * 60 * 60 * 1000); dateObj = new Date(cutoffTime); }
-        const mysqlDateString = formatDateForMySQL(dateObj);
 
+        if (range === 'week') {
+            cutoffTime = now - (7 * 24 * 60 * 60 * 1000);
+            dateObj = new Date(cutoffTime);
+        } else if (range === 'month') {
+            cutoffTime = now - (30 * 24 * 60 * 60 * 1000);
+            dateObj = new Date(cutoffTime);
+        }
+        
+        const mysqlDateString = formatDateForMySQL(dateObj); // Format: 'YYYY-MM-DD HH:mm:ss'
+
+        // --- LITEBANS QUERIES ---
         if (litebansPool) {
-            const [banRows] = await litebansPool.query('SELECT COUNT(*) as count FROM litebans_bans WHERE banned_by_name = ? AND time >= ?', [ign, cutoffTime]);
+            // 1. Bans Count
+            const [banRows] = await litebansPool.query(
+                'SELECT COUNT(*) as count FROM litebans_bans WHERE banned_by_name = ? AND time >= ?', 
+                [ign, cutoffTime]
+            );
             stats.bans = banRows[0]?.count || 0;
-            const [muteRows] = await litebansPool.query('SELECT COUNT(*) as count FROM litebans_mutes WHERE banned_by_name = ? AND time >= ?', [ign, cutoffTime]);
+
+            // 2. Mutes Count
+            const [muteRows] = await litebansPool.query(
+                'SELECT COUNT(*) as count FROM litebans_mutes WHERE banned_by_name = ? AND time >= ?', 
+                [ign, cutoffTime]
+            );
             stats.mutes = muteRows[0]?.count || 0;
         }
 
+        // --- CHECKS & ONLINE QUERIES ---
         if (checksPool) {
-            const [checkCountRows] = await checksPool.query('SELECT COUNT(*) as count FROM revise_logs WHERE admin = ? AND date >= ?', [ign, mysqlDateString]);
+            // 3. Checks Count (revise_logs)
+            // Table: revise_logs (id, date, admin, target, type)
+            const [checkCountRows] = await checksPool.query(
+                'SELECT COUNT(*) as count FROM revise_logs WHERE admin = ? AND date >= ?',
+                [ign, mysqlDateString]
+            );
             stats.checks = checkCountRows[0]?.count || 0;
-            const [playtimeRows] = await checksPool.query(`SELECT SUM(TIMESTAMPDIFF(SECOND, enterDate, exitDate)) as total_seconds FROM online_logs WHERE player = ? AND enterDate >= ? AND exitDate IS NOT NULL`, [ign, mysqlDateString]);
+
+            // 4. Playtime (online_logs)
+            // Table: online_logs (id, player, enterDate, exitDate, ...)
+            // We sum the difference in seconds
+            const [playtimeRows] = await checksPool.query(
+                `SELECT SUM(TIMESTAMPDIFF(SECOND, enterDate, exitDate)) as total_seconds 
+                 FROM online_logs 
+                 WHERE player = ? 
+                 AND enterDate >= ? 
+                 AND exitDate IS NOT NULL`,
+                [ign, mysqlDateString]
+            );
             stats.playtimeSeconds = parseInt(playtimeRows[0]?.total_seconds || 0);
         }
 
-        let lbH = [], chH = [];
+        // --- HISTORY MERGING ---
+        let litebansHistory = [];
+        let checksHistory = [];
+
         if (litebansPool) {
-            const [lbRows] = await litebansPool.query(`(SELECT 'ban' as type, reason, time, until, removed_by_name, banned_by_name as admin, NULL as target FROM litebans_bans WHERE banned_by_name = ? AND time >= ? ORDER BY time DESC) UNION ALL (SELECT 'mute' as type, reason, time, until, removed_by_name, banned_by_name as admin, NULL as target FROM litebans_mutes WHERE banned_by_name = ? AND time >= ? ORDER BY time DESC) ORDER BY time DESC`, [ign, cutoffTime, ign, cutoffTime]);
-            lbH = lbRows.map(r => ({ ...r, dateObj: new Date(parseInt(r.time)), displayType: r.type.toUpperCase() }));
+            const [lbRows] = await litebansPool.query(
+                `
+                (SELECT 'ban' as type, reason, time, until, removed_by_name, banned_by_name as admin, NULL as target FROM litebans_bans WHERE banned_by_name = ? AND time >= ? ORDER BY time DESC)
+                UNION ALL
+                (SELECT 'mute' as type, reason, time, until, removed_by_name, banned_by_name as admin, NULL as target FROM litebans_mutes WHERE banned_by_name = ? AND time >= ? ORDER BY time DESC)
+                ORDER BY time DESC
+                `,
+                [ign, cutoffTime, ign, cutoffTime]
+            );
+            litebansHistory = lbRows.map(r => ({
+                ...r,
+                dateObj: new Date(parseInt(r.time)), // Convert bigInt ms to Date object
+                displayType: r.type.toUpperCase()
+            }));
         }
+
         if (checksPool) {
-            const [checkRows] = await checksPool.query('SELECT id, date, admin, target, type FROM revise_logs WHERE admin = ? AND date >= ? ORDER BY date DESC', [ign, mysqlDateString]);
-            chH = checkRows.map(r => ({ type: 'CHECK', displayType: r.type, reason: 'Проверка на читы', time: new Date(r.date).getTime(), dateObj: new Date(r.date), target: r.target, admin: r.admin, removed_by_name: null, until: 0 }));
+            const [checkRows] = await checksPool.query(
+                'SELECT id, date, admin, target, type FROM revise_logs WHERE admin = ? AND date >= ? ORDER BY date DESC',
+                [ign, mysqlDateString]
+            );
+            checksHistory = checkRows.map(r => ({
+                type: 'CHECK',
+                displayType: r.type, // e.g., ANYDESK, DISCORD
+                reason: 'Проверка на читы',
+                time: new Date(r.date).getTime(), // Convert DateTime to ms
+                dateObj: new Date(r.date),
+                target: r.target,
+                admin: r.admin,
+                removed_by_name: null,
+                until: 0
+            }));
         }
-        stats.history = [...lbH, ...chH].sort((a, b) => b.dateObj - a.dateObj);
-    } catch (error) { console.error(error); }
+
+        // Merge and Sort
+        const combinedHistory = [...litebansHistory, ...checksHistory];
+        combinedHistory.sort((a, b) => b.dateObj - a.dateObj);
+        
+        stats.history = combinedHistory;
+
+    } catch (error) {
+        console.error(`[DB Error] Stats fetch for ${ign}:`, error);
+        // Return partial stats if something fails
+    }
+
     res.json(stats);
 });
 
 app.get('/api/staff', async (req, res) => {
     if (!client.isReady()) return res.status(503).json({ error: "Bot starting..." });
+
     try {
         const guild = await client.guilds.fetch(GUILD_ID).catch(() => null);
         if (!guild) return res.status(404).json({ error: 'Guild not found' });
+
+        // Ensure we fetch presences to show Online/Offline correctly
         await guild.members.fetch({ withPresences: true });
+
         const staffMembers = guild.members.cache.filter(member => member.roles.cache.has(STAFF_ROLE_ID));
+
         const result = staffMembers.map(m => {
+            // Calculate Active Warns
             const userLogs = MOCK_DB.logs.filter(l => l.targetId === m.id);
-            const activeWarns = Math.max(0, userLogs.filter(l => l.action === 'warn').length - userLogs.filter(l => l.action === 'unwarn').length);
-            if (MOCK_DB.balances[m.id] === undefined) MOCK_DB.balances[m.id] = 5000;
+            const warns = userLogs.filter(l => l.action === 'warn').length;
+            const unwarns = userLogs.filter(l => l.action === 'unwarn').length;
+            const activeWarns = Math.max(0, warns - unwarns);
+
+            // Mock Balance Logic (Initialize if not present)
+            if (MOCK_DB.balances[m.id] === undefined) {
+                MOCK_DB.balances[m.id] = 5000; // Starting balance
+            }
+
             return {
-                id: m.id, username: m.user.username, displayName: m.displayName, avatar: m.user.avatar,
-                roles: m.roles.cache.map(r => r.id), status: m.presence ? m.presence.status : 'offline',
-                loa: MOCK_DB.loa[m.id] || null, minecraftNick: MOCK_DB.minecraftNicks[m.id] || null,
-                bannerUrl: MOCK_DB.banners[m.id] || null, warnCount: activeWarns, balance: MOCK_DB.balances[m.id]
+                id: m.id,
+                username: m.user.username,
+                displayName: m.displayName,
+                avatar: m.user.avatar,
+                roles: m.roles.cache.map(r => r.id),
+                status: m.presence ? m.presence.status : 'offline',
+                loa: MOCK_DB.loa[m.id] || null,
+                minecraftNick: MOCK_DB.minecraftNicks[m.id] || null,
+                bannerUrl: MOCK_DB.banners[m.id] || null,
+                warnCount: activeWarns,
+                balance: MOCK_DB.balances[m.id]
             };
         });
+
         res.json(result);
-    } catch (error) { res.status(500).json({ error: error.message }); }
+    } catch (error) {
+        res.status(500).json({ error: error.message });
+    }
 });
 
 app.post('/api/set-nickname', (req, res) => {
     const { targetId, nickname } = req.body;
     if (!targetId) return res.status(400).json({ error: "Target ID required" });
-    if (nickname && nickname.trim() !== "") MOCK_DB.minecraftNicks[targetId] = nickname;
-    else delete MOCK_DB.minecraftNicks[targetId];
+
+    if (nickname && nickname.trim() !== "") {
+        MOCK_DB.minecraftNicks[targetId] = nickname;
+    } else {
+        delete MOCK_DB.minecraftNicks[targetId];
+    }
+    
     res.json({ success: true, nickname: MOCK_DB.minecraftNicks[targetId] });
 });
 
 app.post('/api/set-banner', (req, res) => {
     const { targetId, bannerUrl } = req.body;
     if (!targetId) return res.status(400).json({ error: "Target ID required" });
-    if (bannerUrl && bannerUrl.trim() !== "") MOCK_DB.banners[targetId] = bannerUrl;
-    else delete MOCK_DB.banners[targetId];
+
+    if (bannerUrl && bannerUrl.trim() !== "") {
+        MOCK_DB.banners[targetId] = bannerUrl;
+    } else {
+        delete MOCK_DB.banners[targetId];
+    }
+    
     res.json({ success: true, bannerUrl: MOCK_DB.banners[targetId] });
 });
 
 app.get('/api/logs/:userId', (req, res) => {
-    res.json(MOCK_DB.logs.filter(l => l.targetId === req.params.userId).reverse());
+    const userId = req.params.userId;
+    const userLogs = MOCK_DB.logs.filter(l => l.targetId === userId).reverse();
+    res.json(userLogs);
 });
 
+// Endpoint for Notification Polling
 app.get('/api/updates', (req, res) => {
+    // Return counts and last items so client can check if something changed
     res.json({
         logsCount: MOCK_DB.logs.length,
         appealsCount: MOCK_DB.appeals.length,
@@ -389,44 +521,90 @@ app.get('/api/updates', (req, res) => {
     });
 });
 
-app.get('/api/appeals', (req, res) => { res.json(MOCK_DB.appeals.filter(a => a.status === 'pending').reverse()); });
+app.get('/api/appeals', (req, res) => {
+    // Returns pending appeals
+    res.json(MOCK_DB.appeals.filter(a => a.status === 'pending').reverse());
+});
 
 app.post('/api/appeals/resolve', async (req, res) => {
-    const { appealId, action, adminId } = req.body;
+    const { appealId, action, adminId } = req.body; // action: 'approve' | 'reject'
+    
     const appeal = MOCK_DB.appeals.find(a => a.id === appealId);
     if (!appeal) return res.status(404).json({ error: "Appeal not found" });
+
     appeal.status = action === 'approve' ? 'approved' : 'rejected';
+
     try {
         const user = await client.users.fetch(appeal.userId);
         if (action === 'approve') {
             await user.send(`✅ **Ваша апелляция принята!**\nВарн будет снят.`);
-            MOCK_DB.logs.push({ id: Date.now().toString(), targetId: appeal.userId, adminId: adminId, action: 'unwarn', reason: 'Апелляция одобрена', date: new Date().toISOString() });
+             MOCK_DB.logs.push({
+                id: Date.now().toString(),
+                targetId: appeal.userId,
+                adminId: adminId,
+                action: 'unwarn',
+                reason: 'Апелляция одобрена',
+                date: new Date().toISOString()
+            });
             logActionToDiscord('unwarn', user, { id: adminId }, 'Апелляция одобрена', `Appeal ID: ${appealId}`);
-        } else await user.send(`❌ **Ваша апелляция отклонена.**\nРешение администрации окончательно.`);
+
+        } else {
+            await user.send(`❌ **Ваша апелляция отклонена.**\nРешение администрации окончательно.`);
+        }
     } catch(e) {}
+
     res.json({ success: true });
 });
 
-app.get('/api/loa/requests', (req, res) => { res.json(MOCK_DB.loaRequests); });
+// --- NEW LOA SYSTEM ROUTES ---
+
+app.get('/api/loa/requests', (req, res) => {
+    res.json(MOCK_DB.loaRequests);
+});
 
 app.post('/api/loa/request', (req, res) => {
     const { userId, username, duration, reason } = req.body;
-    if (MOCK_DB.loaRequests.find(r => r.userId === userId)) return res.status(400).json({ error: "У вас уже есть активная заявка на рассмотрении." });
-    MOCK_DB.loaRequests.push({ id: Date.now().toString(), userId, username, duration, reason, date: new Date().toISOString() });
+    
+    // Check if user already has pending request
+    if (MOCK_DB.loaRequests.find(r => r.userId === userId)) {
+        return res.status(400).json({ error: "У вас уже есть активная заявка на рассмотрении." });
+    }
+
+    const request = {
+        id: Date.now().toString(),
+        userId,
+        username,
+        duration,
+        reason,
+        date: new Date().toISOString()
+    };
+
+    MOCK_DB.loaRequests.push(request);
     res.json({ success: true });
 });
 
 app.post('/api/loa/resolve', async (req, res) => {
-    const { requestId, action, adminId } = req.body;
+    const { requestId, action, adminId } = req.body; // action: 'approve' | 'reject'
+    
     const requestIndex = MOCK_DB.loaRequests.findIndex(r => r.id === requestId);
     if (requestIndex === -1) return res.status(404).json({ error: "Request not found" });
+
     const request = MOCK_DB.loaRequests[requestIndex];
-    MOCK_DB.loaRequests.splice(requestIndex, 1);
+    MOCK_DB.loaRequests.splice(requestIndex, 1); // Remove from queue
+
     if (action === 'approve') {
-        MOCK_DB.loa[request.userId] = { active: true, start: Date.now(), end: Date.now() + (request.duration * 24 * 60 * 60 * 1000), reason: request.reason };
+        // Activate LOA
+        MOCK_DB.loa[request.userId] = {
+            active: true,
+            start: Date.now(),
+            end: Date.now() + (request.duration * 24 * 60 * 60 * 1000),
+            reason: request.reason
+        };
+
         try {
             const user = await client.users.fetch(request.userId);
             const admin = await client.users.fetch(adminId).catch(() => ({ id: adminId, tag: 'Admin' }));
+            
             await user.send(`✅ **Ваш отпуск одобрен!**\nСрок: ${request.duration} дн.\nОдобрил: <@${adminId}>`);
             logActionToDiscord('loa', user, admin, "Отпуск одобрен куратором", `Срок: ${request.duration} дн. Причина: ${request.reason}`);
         } catch(e) {}
@@ -436,46 +614,116 @@ app.post('/api/loa/resolve', async (req, res) => {
             await user.send(`❌ **Заявка на отпуск отклонена.**\nПопробуйте позже или свяжитесь с куратором.`);
         } catch(e) {}
     }
+
     res.json({ success: true });
 });
 
+// Manually stop LOA (no approval needed to come BACK to work)
 app.post('/api/loa/stop', async (req, res) => {
     const { userId } = req.body;
+    
     if (MOCK_DB.loa[userId]) {
         MOCK_DB.loa[userId].active = false;
-        try { const user = await client.users.fetch(userId); logActionToDiscord('loa', user, user, "Вернулся из неактива (Вручную)", "Статус: Active"); } catch(e) {}
+        try {
+            const user = await client.users.fetch(userId);
+            logActionToDiscord('loa', user, user, "Вернулся из неактива (Вручную)", "Статус: Active");
+        } catch(e) {}
     }
+
     res.json({ success: true });
 });
 
 app.post('/api/action', async (req, res) => {
-    const { action, targetId, reason, warnCount, adminId } = req.body;
+    const { action, targetId, targetRoleId, reason, warnCount, adminId } = req.body;
+    console.log(`[Action] ${action} -> ${targetId}`);
+
     try {
         const guild = await client.guilds.fetch(GUILD_ID);
         const member = await guild.members.fetch({ user: targetId, force: true }).catch(() => null);
         if (!member) return res.status(404).json({ error: 'Member not found' });
-        let logDetails = "", finalAction = action;
+
+        let logDetails = "";
+        let finalAction = action;
+
+        // Auto Promote/Demote Logic
         if (action === 'promote' || action === 'demote') {
+            // 1. Find current rank index
             const currentRoleIds = member.roles.cache.map(r => r.id);
             let currentRankIndex = -1;
-            for (let i = RANK_ROLE_IDS.length - 1; i >= 0; i--) { if (currentRoleIds.includes(RANK_ROLE_IDS[i])) { currentRankIndex = i; break; } }
-            let newRankIndex = action === 'promote' ? currentRankIndex + 1 : currentRankIndex - 1;
-            if (newRankIndex < 0 || newRankIndex >= RANK_ROLE_IDS.length) return res.status(400).json({ error: "Ошибка границ ранга" });
+            
+            // Find highest rank they have
+            for (let i = RANK_ROLE_IDS.length - 1; i >= 0; i--) {
+                if (currentRoleIds.includes(RANK_ROLE_IDS[i])) {
+                    currentRankIndex = i;
+                    break;
+                }
+            }
+
+            let newRankIndex = currentRankIndex;
+            if (action === 'promote') newRankIndex++;
+            if (action === 'demote') newRankIndex--;
+
+            // Boundary checks
+            if (newRankIndex < 0) return res.status(400).json({ error: "Нельзя понизить ниже Стажера." });
+            if (newRankIndex >= RANK_ROLE_IDS.length) return res.status(400).json({ error: "Достигнут максимальный ранг." });
+
             const newRoleId = RANK_ROLE_IDS[newRankIndex];
-            const rolesToRemove = member.roles.cache.filter(role => RANK_ROLE_IDS.includes(role.id) && role.id !== newRoleId).map(role => role.id);
+            
+            // Apply changes
+            const rolesToRemove = member.roles.cache
+                .filter(role => RANK_ROLE_IDS.includes(role.id) && role.id !== newRoleId)
+                .map(role => role.id);
+            
             if (rolesToRemove.length > 0) await member.roles.remove(rolesToRemove);
             await member.roles.add(newRoleId, reason);
-            logDetails = `Auto: ${currentRankIndex} -> ${newRankIndex}`;
-        } else if (action === 'kick') { await member.kick(reason); logDetails = "Kicked"; }
-        else if (action === 'warn') {
-            logDetails = `Warn ${warnCount}/3`;
-            const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('write_excuse').setLabel('Написать объяснительную').setStyle(ButtonStyle.Primary).setEmoji('📝'));
-            try { await member.send({ content: `⚠️ **ВЫ ПОЛУЧИЛИ ПРЕДУПРЕЖДЕНИЕ**\n\n**Причина:** ${reason}\n**Администратор:** <@${adminId}>\n**Счетчик:** ${warnCount}/3`, components: [row] }); } catch(e) {}
+            
+            logDetails = `Auto: ${currentRankIndex} -> ${newRankIndex} (<@&${newRoleId}>)`;
+        } 
+        else if (action === 'kick') {
+             if (!member.kickable) return res.status(403).json({ error: 'Not kickable' });
+             await member.kick(reason);
+             logDetails = "Kicked";
         }
-        MOCK_DB.logs.push({ id: Date.now().toString(), targetId, adminId, action: finalAction, reason, date: new Date().toISOString() });
+        else if (action === 'warn') {
+             logDetails = `Warn ${warnCount}/3`;
+             try {
+                const row = new ActionRowBuilder()
+                    .addComponents(
+                        new ButtonBuilder()
+                            .setCustomId('write_excuse')
+                            .setLabel('Написать объяснительную')
+                            .setStyle(ButtonStyle.Primary) 
+                            .setEmoji('📝')
+                    );
+                
+                await member.send({ 
+                    content: `⚠️ **ВЫ ПОЛУЧИЛИ ПРЕДУПРЕЖДЕНИЕ**\n\n**Причина:** ${reason}\n**Администратор:** <@${adminId}>\n**Счетчик:** ${warnCount}/3\n\nЕсли вы считаете наказание несправедливым, нажмите кнопку ниже для подачи апелляции/объяснительной.`,
+                    components: [row]
+                });
+            } catch(e) { logDetails += " (DM Failed)"; }
+        }
+        else if (action === 'unwarn') {
+            logDetails = `Unwarned manually`;
+            try { await member.send(`✅ **Варн снят!**\nПричина снятия: ${reason}`); } catch(e) {}
+        }
+
+        // Записываем в "БД"
+        MOCK_DB.logs.push({
+            id: Date.now().toString(),
+            targetId,
+            adminId,
+            action: finalAction,
+            reason,
+            date: new Date().toISOString()
+        });
+
         logActionToDiscord(finalAction, member.user, { id: adminId }, reason, logDetails);
         res.json({ success: true });
-    } catch (error) { res.status(500).json({ error: error.message }); }
+
+    } catch (error) {
+        console.error("API Error:", error);
+        res.status(500).json({ error: error.message });
+    }
 });
 
 app.listen(PORT, () => console.log(`✅ Server running on ${PORT}`));
