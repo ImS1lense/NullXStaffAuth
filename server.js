@@ -7,12 +7,14 @@ const { Client, GatewayIntentBits, Partials, EmbedBuilder, ActionRowBuilder, But
 const app = express();
 const PORT = process.env.PORT || 4000;
 
+// === IMPORTANT: TOKEN MUST BE IN ENV VARS ON RENDER ===
+const DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN;
+
 const GUILD_ID = process.env.GUILD_ID || '1458138848822431770'; 
 const LOG_CHANNEL_ID = '1458163321302945946'; 
 const STAFF_ROLE_ID = '1458158245700046901'; 
 
 // === DATABASE CONFIGURATION ===
-
 const LITEBANS_DB_CONFIG = {
     host: process.env.DB_HOST || 'panel.nullx.space',
     user: process.env.DB_USER || 'u1_FAXro5fVCj',
@@ -120,22 +122,22 @@ const client = new Client({
     partials: [Partials.Channel, Partials.Message] 
 });
 
-// === IMPROVED BOT LOGGING ===
-if (process.env.DISCORD_BOT_TOKEN) {
-    console.log("🔑 Initializing Discord Client...");
-    client.login(process.env.DISCORD_BOT_TOKEN)
-        .then(() => console.log("✅ Login Request Sent (Waiting for Gateway...)"))
-        .catch(err => console.error("❌ Login Failed immediately:", err.message));
+// === BOT INITIALIZATION ===
+if (DISCORD_BOT_TOKEN) {
+    console.log("🔑 Logging in to Discord...");
+    client.login(DISCORD_BOT_TOKEN)
+        .then(() => console.log("✅ Login Promise Resolved. Waiting for Ready..."))
+        .catch(err => console.error("❌ FATAL LOGIN ERROR:", err.message));
 } else {
-    console.error("❌ ERROR: DISCORD_BOT_TOKEN is missing!");
+    console.error("❌ ERROR: DISCORD_BOT_TOKEN is missing in Environment Variables!");
 }
 
-client.once('ready', () => console.log(`✅ BOT ONLINE: ${client.user.tag}`));
+client.once('ready', () => {
+    console.log(`✅ BOT ONLINE: ${client.user.tag}`);
+    console.log(`✅ Monitoring Guild ID: ${GUILD_ID}`);
+});
+
 client.on('error', (err) => console.error("❌ Discord Client Error:", err));
-// Debug events to help diagnose "Hanging" issues
-client.on('shardError', error => console.error('❌ A websocket connection encountered an error:', error));
-client.on('shardDisconnect', (event, id) => console.log(`⚠️ Shard ${id} disconnected.`));
-// client.on('debug', console.log); // Uncomment this if you are desperate to see raw debug info
 
 // === HELPER FUNCTIONS ===
 
@@ -182,7 +184,7 @@ async function logActionToDiscord(action, targetUser, adminUser, reason, details
 
 function formatDateForMySQL(date) { return date.toISOString().slice(0, 19).replace('T', ' '); }
 
-// === FIXED WAIT FOR READY (Prevents Memory Leak) ===
+// === ROBUST WAIT FOR READY ===
 async function waitForReady(timeout = 5000) {
     if (client.isReady()) return true;
     console.log("⏳ Waiting for bot to be ready...");
@@ -200,8 +202,8 @@ async function waitForReady(timeout = 5000) {
         const timeoutId = setTimeout(() => {
             if (isResolved) return;
             isResolved = true;
-            console.log("⚠️ Bot wait timeout reached.");
-            client.off('ready', onReady); // REMOVE LISTENER to prevent memory leak
+            console.log("⚠️ Bot wait timeout reached. Proceeding without bot.");
+            client.off('ready', onReady); 
             resolve(false);
         }, timeout);
         
@@ -212,9 +214,10 @@ async function waitForReady(timeout = 5000) {
 // === API ROUTES ===
 
 app.get('/api/staff', async (req, res) => {
-    // Wait max 5 seconds, not 15, to fail faster
-    const isReady = await waitForReady(5000);
+    // Wait max 3 seconds to avoid blocking site load
+    const isReady = await waitForReady(3000);
     
+    // If bot failed, return empty list so site loads
     if (!isReady) {
          console.warn("⚠️ Bot not ready. Returning empty list.");
          return res.json([]); 
