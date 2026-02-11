@@ -124,12 +124,17 @@ const client = new Client({
 
 // === BOT INITIALIZATION ===
 if (DISCORD_BOT_TOKEN) {
-    console.log("🔑 Logging in to Discord...");
+    console.log("🔑 Logging in to Discord... (Token is set)");
     client.login(DISCORD_BOT_TOKEN)
         .then(() => console.log("✅ Login Promise Resolved. Waiting for Ready..."))
-        .catch(err => console.error("❌ FATAL LOGIN ERROR:", err.message));
+        .catch(err => {
+            console.error("❌ FATAL LOGIN ERROR:", err.message);
+            console.error("👉 Check if Token is correct in Render Environment Variables.");
+            console.error("👉 Check if Privileged Intents are enabled in Discord Dev Portal.");
+        });
 } else {
     console.error("❌ ERROR: DISCORD_BOT_TOKEN is missing in Environment Variables!");
+    console.error("👉 Go to Render Dashboard -> Environment -> Add DISCORD_BOT_TOKEN");
 }
 
 client.once('ready', () => {
@@ -185,7 +190,7 @@ async function logActionToDiscord(action, targetUser, adminUser, reason, details
 function formatDateForMySQL(date) { return date.toISOString().slice(0, 19).replace('T', ' '); }
 
 // === ROBUST WAIT FOR READY ===
-async function waitForReady(timeout = 5000) {
+async function waitForReady(timeout = 10000) { // Increased to 10 seconds for slower hosts
     if (client.isReady()) return true;
     console.log("⏳ Waiting for bot to be ready...");
     
@@ -214,8 +219,8 @@ async function waitForReady(timeout = 5000) {
 // === API ROUTES ===
 
 app.get('/api/staff', async (req, res) => {
-    // Wait max 3 seconds to avoid blocking site load
-    const isReady = await waitForReady(3000);
+    // Wait max 10 seconds to avoid blocking site load too long, but giving bot a chance
+    const isReady = await waitForReady(10000);
     
     // If bot failed, return empty list so site loads
     if (!isReady) {
