@@ -24,7 +24,7 @@ const LITEBANS_DB_CONFIG = {
     queueLimit: 0
 };
 
-// 2. Checks & Online Database (ReviseLogs & OnlineLogs)
+// 2. Checks & Online Database (ReviseLogs & OnlineLogs & Commands)
 const CHECKS_DB_CONFIG = {
     host: 'panel.nullx.space', 
     user: 'u1_McHWJLbCr4',
@@ -79,7 +79,7 @@ const MOCK_DB = {
     banners: {}, // { userId: "https://image.url" }
     balances: {}, // { userId: amount } (Virtual salary)
     lastWithdraw: {}, // { userId: timestamp }
-    economyLogs: [] // { id, userId, executorId, type, amount, date, details }
+    economyLogs: [] // { id, userId, executorId, type, amount, date, details, source }
 };
 
 app.use(cors({
@@ -203,7 +203,7 @@ function formatDateForMySQL(date) {
 // === API Routes ===
 
 // --- ECONOMY / WITHDRAWAL ---
-app.post('/api/economy/withdraw', (req, res) => {
+app.post('/api/economy/withdraw', async (req, res) => {
     const { userId, amount, minecraftNick } = req.body;
     
     if (!userId || !amount || !minecraftNick) {
@@ -226,30 +226,55 @@ app.post('/api/economy/withdraw', (req, res) => {
         return res.status(400).json({ error: "Недостаточно средств" });
     }
 
-    // 3. Deduct & Update
-    MOCK_DB.balances[userId] = currentBalance - amount;
-    MOCK_DB.lastWithdraw[userId] = now;
+    // 3. Database Check
+    if (!checksPool) {
+         return res.status(503).json({ error: "Ошибка подключения к базе данных (Выдача)" });
+    }
 
-    // 4. Log
-    MOCK_DB.economyLogs.push({
-        id: Date.now().toString(),
-        userId,
-        executorId: userId, // Self
-        type: 'WITHDRAW',
-        amount: -amount,
-        date: new Date().toISOString(),
-        details: `Вывод на IGN: ${minecraftNick}`
-    });
+    try {
+        // 4. Optimistic Deduction
+        MOCK_DB.balances[userId] = currentBalance - amount;
+        MOCK_DB.lastWithdraw[userId] = now;
 
-    // TODO: Implement RCON command execution here
-    // Example: await rcon.send(`eco give ${minecraftNick} ${amount}`);
-    console.log(`[Economy] Withdrawal: ${amount} Ametrines to ${minecraftNick} (${userId})`);
+        // 5. Execute MySQL Command
+        // Command format: p give {user} {sum}
+        const commandStr = `p give ${minecraftNick} ${amount}`;
+        
+        // Use checksPool because it connects to s1_logs where 'commands' table is
+        await checksPool.query(
+            'INSERT INTO commands (command) VALUES (?)',
+            [commandStr]
+        );
 
-    res.json({ 
-        success: true, 
-        newBalance: MOCK_DB.balances[userId],
-        message: `Успешно выведено ${amount} Аметринов на аккаунт ${minecraftNick}` 
-    });
+        // 6. Log Transaction
+        MOCK_DB.economyLogs.push({
+            id: Date.now().toString(),
+            userId,
+            executorId: userId, // Self
+            type: 'WITHDRAW',
+            amount: -amount,
+            date: new Date().toISOString(),
+            details: `Вывод на IGN: ${minecraftNick}`,
+            source: 'Личный кабинет'
+        });
+
+        console.log(`[Economy] Withdrawal success: ${amount} Ametrines to ${minecraftNick} (Cmd: ${commandStr})`);
+
+        res.json({ 
+            success: true, 
+            newBalance: MOCK_DB.balances[userId],
+            message: `Успешно выведено ${amount} Аметринов на аккаунт ${minecraftNick}` 
+        });
+
+    } catch (error) {
+        console.error("[Economy] Withdrawal Error:", error);
+
+        // Rollback
+        MOCK_DB.balances[userId] = currentBalance;
+        MOCK_DB.lastWithdraw[userId] = lastTime; // Reset cooldown
+
+        res.status(500).json({ error: "Ошибка базы данных. Средства возвращены." });
+    }
 });
 
 // --- ECONOMY / ADMIN MANAGE ---
@@ -266,19 +291,23 @@ app.post('/api/economy/manage', (req, res) => {
     let newBalance = oldBalance;
     let logType = '';
     let logAmount = 0;
+    let source = 'Администрация';
 
     if (action === 'give') {
         newBalance = oldBalance + amount;
-        logType = 'ADMIN_GIVE';
+        logType = 'INCOME';
         logAmount = amount;
+        source = 'Пополнение счета (Зарплата)';
     } else if (action === 'take') {
         newBalance = Math.max(0, oldBalance - amount);
-        logType = 'ADMIN_TAKE';
+        logType = 'WITHDRAW';
         logAmount = -amount;
+        source = 'Списание средств (Штраф)';
     } else if (action === 'set') {
         newBalance = amount;
-        logType = 'ADMIN_SET';
-        logAmount = amount; // For SET, amount is the new absolute value
+        logType = 'INCOME';
+        logAmount = amount; // For SET, amount is the new absolute value (simplified log)
+        source = 'Корректировка баланса';
     }
 
     MOCK_DB.balances[targetId] = newBalance;
@@ -290,7 +319,8 @@ app.post('/api/economy/manage', (req, res) => {
         type: logType,
         amount: logAmount,
         date: new Date().toISOString(),
-        details: `Админ действие (${action})`
+        details: `Действие администратора (${action})`,
+        source: source
     });
 
     res.json({ success: true, newBalance });
@@ -677,7 +707,7 @@ app.post('/api/action', async (req, res) => {
             if (rolesToRemove.length > 0) await member.roles.remove(rolesToRemove);
             await member.roles.add(newRoleId, reason);
             
-            logDetails = `Auto: ${currentRankIndex} -> ${newRankIndex} (<@&${newRoleId}>)`;
+            logDetails = `Auto: ${currentRankIndex} -> ${newRankIndex}`;
         } 
         else if (action === 'kick') {
              if (!member.kickable) return res.status(403).json({ error: 'Not kickable' });
