@@ -277,7 +277,7 @@ const LoginPage: React.FC = () => {
             // New Action Logged
             if (lastLogCount > 0 && data.logsCount > lastLogCount) {
                 const newLog = data.lastLog;
-                if (newLog.adminId !== user.id) { // Don't notify if I did it (handled locally)
+                if (newLog && newLog.adminId !== user.id) { // Don't notify if I did it (handled locally)
                     addToast("Новое действие", `${newLog.action.toUpperCase()} от Admin ID ${newLog.adminId}`, 'info');
                 }
                 // Refresh data
@@ -330,6 +330,12 @@ const LoginPage: React.FC = () => {
       try {
           const res = await fetch(`${API_URL}/staff`);
           const data = await res.json();
+          
+          if (!Array.isArray(data)) {
+              if (data.error) throw new Error(data.error);
+              throw new Error("Invalid response");
+          }
+
           const formatted = data.map((m: any) => {
              let bestRole = { name: 'STAFF', color: 'text-zinc-500', weight: 0, id: '', bg: 'bg-zinc-900 border-zinc-800' };
              m.roles.forEach((rid: string) => {
@@ -366,7 +372,10 @@ const LoginPage: React.FC = () => {
               return updated || prev;
           });
 
-      } catch(e) {}
+      } catch(e: any) {
+          console.error("Failed to fetch staff list:", e);
+          addToast("Ошибка соединения", "Не удалось загрузить список сотрудников. Сервер недоступен.", "error");
+      }
   };
 
   const fetchLogs = async (userId: string) => {
@@ -1115,6 +1124,7 @@ const LoginPage: React.FC = () => {
                                                       <button 
                                                         onClick={() => { setNewBannerUrl(selectedStaff.bannerUrl || ''); setShowBannerModal(true); }}
                                                         className="px-2 py-1 bg-purple-900/40 hover:bg-purple-900/60 border border-purple-500/30 rounded text-purple-300 transition-colors flex items-center gap-1 text-[10px] font-bold backdrop-blur-sm"
+                                                        title="Изменить фон"
                                                       >
                                                           <Image className="w-3 h-3" /> ФОН
                                                       </button>
@@ -1141,6 +1151,7 @@ const LoginPage: React.FC = () => {
                                                       <button 
                                                         onClick={() => { setNewNick(selectedStaff.minecraftNick || ''); setShowNickModal(true); }}
                                                         className="px-2 py-1 bg-zinc-800/80 hover:bg-zinc-700 rounded text-zinc-400 hover:text-white transition-colors flex items-center gap-1 text-[10px] font-bold backdrop-blur-sm"
+                                                        title="Изменить никнейм"
                                                       >
                                                           <PenSquare className="w-3 h-3" /> IGN
                                                       </button>

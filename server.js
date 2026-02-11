@@ -122,14 +122,9 @@ const TEMP_DB = {
     appeals: [], 
 };
 
+// OPEN CORS completely to avoid issues
 app.use(cors({
-    origin: function (origin, callback) {
-        if (!origin) return callback(null, true);
-        if (origin.includes('vercel.app') || origin.includes('localhost') || origin.includes('render.com')) {
-            return callback(null, true);
-        }
-        return callback(new Error('Not allowed by CORS'));
-    },
+    origin: true,
     credentials: true
 }));
 
@@ -142,7 +137,10 @@ const client = new Client({
 
 if (process.env.DISCORD_BOT_TOKEN) {
     client.login(process.env.DISCORD_BOT_TOKEN).catch(err => console.error("❌ Auth Error:", err.message));
+} else {
+    console.error("❌ ERROR: DISCORD_BOT_TOKEN is missing in Environment Variables!");
 }
+
 client.once('ready', () => console.log(`✅ Bot ready: ${client.user.tag}`));
 
 // === HELPER FUNCTIONS FOR DB ===
@@ -156,12 +154,14 @@ async function getUserData(discordId, username = 'Unknown') {
             return { balance: 5000, minecraft_nick: null, banner_url: null, last_withdraw: 0 };
         }
         return rows[0];
-    } catch (e) { console.error("DB GetUser Error:", e); return {}; }
+    } catch (e) { console.error("DB GetUser Error:", e); return { balance: 5000, minecraft_nick: null, banner_url: null, last_withdraw: 0 }; }
 }
 
 async function updateUserBalance(discordId, newBalance) {
     if (!checksPool) return;
-    await checksPool.query('UPDATE web_users SET balance = ? WHERE discord_id = ?', [newBalance, discordId]);
+    try {
+        await checksPool.query('UPDATE web_users SET balance = ? WHERE discord_id = ?', [newBalance, discordId]);
+    } catch (e) {}
 }
 
 async function addWebLog(targetId, adminId, action, reason, details) {
@@ -255,9 +255,13 @@ app.post('/api/economy/manage', async (req, res) => {
 
 app.get('/api/economy/history/:userId', async (req, res) => {
     if (!checksPool) return res.json({ logs: [], lastWithdraw: 0 });
-    const [logs] = await checksPool.query('SELECT * FROM web_economy_logs WHERE user_id = ? ORDER BY date DESC LIMIT 50', [req.params.userId]);
-    const userData = await getUserData(req.params.userId);
-    res.json({ logs, lastWithdraw: userData.last_withdraw });
+    try {
+        const [logs] = await checksPool.query('SELECT * FROM web_economy_logs WHERE user_id = ? ORDER BY date DESC LIMIT 50', [req.params.userId]);
+        const userData = await getUserData(req.params.userId);
+        res.json({ logs, lastWithdraw: userData.last_withdraw });
+    } catch(e) {
+        res.json({ logs: [], lastWithdraw: 0 });
+    }
 });
 
 app.get('/api/stats/:ign', async (req, res) => {
@@ -303,7 +307,13 @@ app.get('/api/stats/:ign', async (req, res) => {
 });
 
 app.get('/api/staff', async (req, res) => {
-    if (!client.isReady()) return res.status(503).json({ error: "Bot starting..." });
+    // Return partial results if bot not ready, don't just crash
+    if (!client.isReady()) {
+         console.log("⚠️ Bot not ready, returning empty staff list to prevent frontend crash.");
+         // We can't return staff without discord, so we return empty array but with 200 status
+         return res.json([]); 
+    }
+    
     try {
         const guild = await client.guilds.fetch(GUILD_ID).catch(() => null);
         if (!guild) return res.status(404).json({ error: 'Guild not found' });
@@ -311,9 +321,18 @@ app.get('/api/staff', async (req, res) => {
         
         const staffMembers = guild.members.cache.filter(member => member.roles.cache.has(STAFF_ROLE_ID));
         
-        // Fetch all web data at once
-        const [dbUsers] = checksPool ? await checksPool.query('SELECT * FROM web_users') : [[]];
-        const [dbLogs] = checksPool ? await checksPool.query('SELECT target_id, action FROM web_logs') : [[]];
+        // Fetch all web data at once, handle DB failure gracefully
+        let dbUsers = [];
+        let dbLogs = [];
+        
+        try {
+             if (checksPool) {
+                 [dbUsers] = await checksPool.query('SELECT * FROM web_users');
+                 [dbLogs] = await checksPool.query('SELECT target_id, action FROM web_logs');
+             }
+        } catch (dbErr) {
+            console.error("⚠️ DB Error in /api/staff (Returning discord data only):", dbErr.message);
+        }
 
         const result = staffMembers.map(m => {
             const userDb = dbUsers.find(u => u.discord_id === m.id) || {};
@@ -331,7 +350,10 @@ app.get('/api/staff', async (req, res) => {
             };
         });
         res.json(result);
-    } catch (error) { res.status(500).json({ error: error.message }); }
+    } catch (error) { 
+        console.error("Staff Fetch Error:", error);
+        res.status(500).json({ error: error.message }); 
+    }
 });
 
 app.post('/api/set-nickname', async (req, res) => {
@@ -357,20 +379,24 @@ app.post('/api/set-banner', async (req, res) => {
 
 app.get('/api/logs/:userId', async (req, res) => {
     if (!checksPool) return res.json([]);
-    const [rows] = await checksPool.query('SELECT * FROM web_logs WHERE target_id = ? ORDER BY date DESC', [req.params.userId]);
-    // Format for frontend
-    const formatted = rows.map(r => ({
-        id: r.id, targetId: r.target_id, adminId: r.admin_id, action: r.action, reason: r.reason, date: r.date
-    }));
-    res.json(formatted);
+    try {
+        const [rows] = await checksPool.query('SELECT * FROM web_logs WHERE target_id = ? ORDER BY date DESC', [req.params.userId]);
+        const formatted = rows.map(r => ({
+            id: r.id, targetId: r.target_id, adminId: r.admin_id, action: r.action, reason: r.reason, date: r.date
+        }));
+        res.json(formatted);
+    } catch (e) { res.json([]); }
 });
 
 app.get('/api/updates', async (req, res) => {
     let logsCount = 0;
-    if (checksPool) {
-        const [rows] = await checksPool.query('SELECT COUNT(*) as count FROM web_logs');
-        logsCount = rows[0].count;
-    }
+    try {
+        if (checksPool) {
+            const [rows] = await checksPool.query('SELECT COUNT(*) as count FROM web_logs');
+            logsCount = rows[0].count;
+        }
+    } catch(e) {}
+    
     res.json({
         logsCount: logsCount,
         appealsCount: TEMP_DB.appeals.length,
