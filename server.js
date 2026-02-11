@@ -2,13 +2,12 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const mysql = require('mysql2/promise');
-const { Client, GatewayIntentBits, Partials, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, Events } = require('discord.js');
+const { Client, GatewayIntentBits, Partials, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ModalBuilder, TextInputBuilder, TextInputStyle, Events, REST, Routes } = require('discord.js');
 
 const app = express();
 const PORT = process.env.PORT || 4000;
 
 // === TOKEN MANAGEMENT ===
-// Try to get token from ENV. 
 const ENV_TOKEN = process.env.DISCORD_BOT_TOKEN ? process.env.DISCORD_BOT_TOKEN.trim() : null;
 
 if (!ENV_TOKEN) {
@@ -50,17 +49,15 @@ let checksPool = null;
 async function initDB() {
     try {
         litebansPool = mysql.createPool(LITEBANS_DB_CONFIG);
-        // Test connection
-        const conn = await litebansPool.getConnection();
-        conn.release();
-        console.log("✅ LiteBans DB Connected");
-    } catch (err) { console.error("❌ LiteBans DB Error:", err.message); }
+        console.log("✅ LiteBans DB Pool Initialized");
+    } catch (err) { console.error("❌ LiteBans Config Error:", err.message); }
 
     try {
         checksPool = mysql.createPool(CHECKS_DB_CONFIG);
-        const conn = await checksPool.getConnection();
+        console.log("✅ Checks/Logs DB Pool Initialized");
         
-        await conn.query(`
+        const connection = await checksPool.getConnection();
+        await connection.query(`
             CREATE TABLE IF NOT EXISTS web_users (
                 discord_id VARCHAR(32) PRIMARY KEY,
                 username VARCHAR(64),
@@ -70,7 +67,7 @@ async function initDB() {
                 last_withdraw BIGINT DEFAULT 0
             )
         `);
-        await conn.query(`
+        await connection.query(`
             CREATE TABLE IF NOT EXISTS web_logs (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 target_id VARCHAR(32),
@@ -81,7 +78,7 @@ async function initDB() {
                 date DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         `);
-        await conn.query(`
+        await connection.query(`
             CREATE TABLE IF NOT EXISTS web_economy_logs (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 user_id VARCHAR(32),
@@ -93,9 +90,9 @@ async function initDB() {
                 date DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         `);
-        conn.release();
-        console.log("✅ Checks/Logs DB Connected & Tables Verified");
-    } catch (err) { console.error("❌ Checks/Logs DB Error:", err.message); }
+        connection.release();
+        console.log("✅ Web Panel Tables Verified");
+    } catch (err) { console.error("❌ Checks/Logs DB Config Error:", err.message); }
 }
 
 initDB();
@@ -116,20 +113,12 @@ app.use(cors({ origin: true, credentials: true }));
 app.use(express.json());
 
 const client = new Client({
-    // We NEED GuildMembers to fetch staff list properly. 
-    // IF THIS FAILS: User must enable "Server Members Intent" in Discord Developer Portal.
     intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers, GatewayIntentBits.DirectMessages],
     partials: [Partials.Channel, Partials.Message] 
 });
 
-// Capture generic errors to prevent crashes
-client.on('error', (error) => {
-    console.error('❌ Discord Client Error:', error);
-});
-
-client.on('warn', (info) => {
-    console.log('⚠️ Discord Client Warning:', info);
-});
+client.on('error', (error) => console.error('❌ Discord Client Error:', error));
+client.on('warn', (info) => console.log('⚠️ Discord Client Warning:', info));
 
 if (DISCORD_BOT_TOKEN) {
     console.log("🔄 Attempting to login to Discord...");
@@ -137,12 +126,8 @@ if (DISCORD_BOT_TOKEN) {
         .then(() => console.log("✅ Discord Login Successful!"))
         .catch(err => {
             console.error("❌ FATAL LOGIN ERROR:", err.message);
-            if (err.code === 'DisallowedIntents') {
-                console.error("!!! URGENT: You must enable 'Server Members Intent' in the Discord Developer Portal for this bot !!!");
-            }
+            if (err.code === 'DisallowedIntents') console.error("👉 Check INTENTS in Developer Portal.");
         });
-} else {
-    console.error("❌ NO TOKEN PROVIDED. Bot will not function.");
 }
 
 client.once('ready', () => {
@@ -195,56 +180,77 @@ function formatDateForMySQL(date) { return date.toISOString().slice(0, 19).repla
 
 // === API ROUTES ===
 app.get('/api/staff', async (req, res) => {
-    // We removed the blocking waitForReady. We try to fetch directly.
-    // If the bot isn't ready, the REST call might still work if the token is valid.
-    
-    if (!client.isReady()) {
-        console.log("⚠️ /api/staff called but Bot is not ready yet. Attempting fetch anyway...");
-    }
-
     try {
-        const guild = await client.guilds.fetch(GUILD_ID).catch((e) => {
-            console.error(`Failed to fetch guild ${GUILD_ID}:`, e.message);
-            throw new Error("Guild not accessible");
-        });
+        let staffMembers = [];
 
-        if (!guild) return res.status(500).json({ error: 'Bot cannot access Guild' });
-        
-        // Fetch all members. This is expensive but necessary for the full list.
-        await guild.members.fetch().catch(e => console.error("Member fetch warning:", e.message));
-        
-        // Filter from cache
-        const staffMembers = guild.members.cache.filter(member => member.roles.cache.has(STAFF_ROLE_ID));
-        
+        // STRATEGY 1: Use Client if Ready (Fastest if cached)
+        if (client.isReady()) {
+            const guild = await client.guilds.fetch(GUILD_ID).catch(() => null);
+            if (guild) {
+                const members = await guild.members.fetch();
+                staffMembers = members
+                    .filter(m => m.roles.cache.has(STAFF_ROLE_ID))
+                    .map(m => ({
+                        id: m.id,
+                        username: m.user.username,
+                        displayName: m.displayName,
+                        avatar: m.user.avatar,
+                        roles: m.roles.cache.map(r => r.id),
+                        status: m.presence ? m.presence.status : 'online',
+                        loa: TEMP_DB.loa[m.id] || null
+                    }));
+            }
+        }
+
+        // STRATEGY 2: REST API FALLBACK (If Bot not ready or fetch failed)
+        // This bypasses the Gateway connection entirely
+        if (staffMembers.length === 0 && DISCORD_BOT_TOKEN) {
+            console.log("⚠️ Bot not ready/connected. Fetching staff via REST API...");
+            const rest = new REST({ version: '10' }).setToken(DISCORD_BOT_TOKEN);
+            const rawMembers = await rest.get(Routes.guildMembers(GUILD_ID) + '?limit=1000').catch(e => {
+                console.error("REST Fetch Error:", e);
+                return [];
+            });
+            
+            // Filter and Map raw data
+            staffMembers = rawMembers
+                .filter(m => m.roles.includes(STAFF_ROLE_ID))
+                .map(m => ({
+                    id: m.user.id,
+                    username: m.user.username,
+                    displayName: m.nick || m.user.global_name || m.user.username,
+                    avatar: m.user.avatar,
+                    roles: m.roles, // Raw array of IDs
+                    status: 'online', // REST doesn't give presence
+                    loa: TEMP_DB.loa[m.user.id] || null
+                }));
+        }
+
+        // Fetch DB Data for the found staff
         let dbUsers = [], dbLogs = [];
         try {
              if (checksPool) {
                  [dbUsers] = await checksPool.query('SELECT * FROM web_users');
                  [dbLogs] = await checksPool.query('SELECT target_id, action FROM web_logs');
              }
-        } catch (dbErr) {
-            console.error("DB Fetch Error in staff route:", dbErr.message);
-        }
+        } catch (dbErr) { console.error("DB Fetch Error:", dbErr.message); }
 
         const result = staffMembers.map(m => {
             const userDb = dbUsers.find(u => u.discord_id === m.id) || {};
             const userLogs = dbLogs.filter(l => l.target_id === m.id);
             const activeWarns = Math.max(0, userLogs.filter(l => l.action === 'warn').length - userLogs.filter(l => l.action === 'unwarn').length);
             return {
-                id: m.id, username: m.user.username, displayName: m.displayName, avatar: m.user.avatar,
-                roles: m.roles.cache.map(r => r.id), 
-                status: m.presence ? m.presence.status : 'online', // Fallback to online if presence intent missing
-                loa: TEMP_DB.loa[m.id] || null, 
+                ...m,
                 minecraftNick: userDb.minecraft_nick || null,
-                bannerUrl: userDb.banner_url || null, warnCount: activeWarns, 
+                bannerUrl: userDb.banner_url || null, 
+                warnCount: activeWarns, 
                 balance: userDb.balance !== undefined ? userDb.balance : 5000
             };
         });
-        
-        // console.log(`Returning ${result.length} staff members`);
+
         res.json(result);
     } catch (error) { 
-        console.error("Staff Fetch Error:", error.message);
+        console.error("Staff Fetch Fatal Error:", error);
         res.status(500).json({ error: "Failed to load staff list", details: error.message });
     }
 });
