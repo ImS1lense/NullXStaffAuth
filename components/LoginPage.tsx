@@ -12,7 +12,7 @@ import {
 // CONFIGURATION
 // ==========================================
 // Используем ID, который ты скинул
-const DISCORD_CLIENT_ID = '1468331655646417203'; 
+const DISCORD_CLIENT_ID = '1471232949880881287'; 
 const TARGET_GUILD_ID = '1458138848822431770'; 
 const STAFF_ROLE_ID = '1458158245700046901';
 const CURATOR_ROLE_ID = '1458277039399374991';
