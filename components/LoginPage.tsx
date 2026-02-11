@@ -329,6 +329,13 @@ const LoginPage: React.FC = () => {
   const fetchStaffList = async (myId: string) => {
       try {
           const res = await fetch(`${API_URL}/staff`);
+          
+          if (res.status === 503) {
+             addToast("Сервер запускается", "Бот подключается к Discord API...", "info");
+             setTimeout(() => fetchStaffList(myId), 2000);
+             return;
+          }
+
           const data = await res.json();
           
           if (!Array.isArray(data)) {
@@ -874,6 +881,12 @@ const LoginPage: React.FC = () => {
 
           {/* Staff List */}
           <div className="flex-1 overflow-y-auto custom-scrollbar p-2 md:p-4 space-y-1">
+              {staffList.length === 0 && (
+                  <div className="flex flex-col items-center justify-center py-10 text-zinc-500 gap-2">
+                      <Loader2 className="w-6 h-6 animate-spin text-purple-500" />
+                      <div className="text-[10px] font-bold uppercase tracking-widest">Загрузка...</div>
+                  </div>
+              )}
               {filteredStaff.map(s => (
                   <div 
                     key={s.id}

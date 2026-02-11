@@ -193,6 +193,24 @@ async function logActionToDiscord(action, targetUser, adminUser, reason, details
 
 function formatDateForMySQL(date) { return date.toISOString().slice(0, 19).replace('T', ' '); }
 
+// === HELPER: Wait for Bot Ready ===
+async function waitForReady(timeout = 10000) {
+    if (client.isReady()) return true;
+    console.log("⏳ Waiting for bot to be ready...");
+    return new Promise(resolve => {
+        const timeoutId = setTimeout(() => {
+            console.log("⚠️ Bot wait timeout reached.");
+            resolve(false);
+        }, timeout);
+        
+        client.once('ready', () => {
+            clearTimeout(timeoutId);
+            console.log("✅ Bot became ready during wait.");
+            resolve(true);
+        });
+    });
+}
+
 // === API Routes ===
 
 app.post('/api/economy/withdraw', async (req, res) => {
@@ -307,11 +325,12 @@ app.get('/api/stats/:ign', async (req, res) => {
 });
 
 app.get('/api/staff', async (req, res) => {
-    // Return partial results if bot not ready, don't just crash
-    if (!client.isReady()) {
-         console.log("⚠️ Bot not ready, returning empty staff list to prevent frontend crash.");
-         // We can't return staff without discord, so we return empty array but with 200 status
-         return res.json([]); 
+    // Attempt to wait for bot to be ready
+    const isReady = await waitForReady();
+    
+    if (!isReady) {
+         console.log("⚠️ Bot still not ready after wait, returning 503.");
+         return res.status(503).json({ error: "Bot is starting up, please retry." });
     }
     
     try {
