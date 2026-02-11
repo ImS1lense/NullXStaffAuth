@@ -7,9 +7,17 @@ const { Client, GatewayIntentBits, Partials, EmbedBuilder, ActionRowBuilder, But
 const app = express();
 const PORT = process.env.PORT || 4000;
 
-// === TOKEN FROM ENV ONLY (Trimmed to remove accidental spaces) ===
-const DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN ? process.env.DISCORD_BOT_TOKEN.trim() : null;
+// === TOKEN MANAGEMENT ===
+// Try to get token from ENV. 
+const ENV_TOKEN = process.env.DISCORD_BOT_TOKEN ? process.env.DISCORD_BOT_TOKEN.trim() : null;
 
+if (!ENV_TOKEN) {
+    console.error("⚠️ WARNING: DISCORD_BOT_TOKEN not found in environment variables.");
+} else {
+    console.log(`🔑 Token found in ENV (Length: ${ENV_TOKEN.length}). Ends with: ...${ENV_TOKEN.slice(-5)}`);
+}
+
+const DISCORD_BOT_TOKEN = ENV_TOKEN;
 const GUILD_ID = process.env.GUILD_ID || '1458138848822431770'; 
 const LOG_CHANNEL_ID = '1458163321302945946'; 
 const STAFF_ROLE_ID = '1458158245700046901'; 
@@ -42,15 +50,17 @@ let checksPool = null;
 async function initDB() {
     try {
         litebansPool = mysql.createPool(LITEBANS_DB_CONFIG);
-        console.log("✅ LiteBans DB Pool Initialized");
-    } catch (err) { console.error("❌ LiteBans Config Error:", err.message); }
+        // Test connection
+        const conn = await litebansPool.getConnection();
+        conn.release();
+        console.log("✅ LiteBans DB Connected");
+    } catch (err) { console.error("❌ LiteBans DB Error:", err.message); }
 
     try {
         checksPool = mysql.createPool(CHECKS_DB_CONFIG);
-        console.log("✅ Checks/Logs DB Pool Initialized");
+        const conn = await checksPool.getConnection();
         
-        const connection = await checksPool.getConnection();
-        await connection.query(`
+        await conn.query(`
             CREATE TABLE IF NOT EXISTS web_users (
                 discord_id VARCHAR(32) PRIMARY KEY,
                 username VARCHAR(64),
@@ -60,7 +70,7 @@ async function initDB() {
                 last_withdraw BIGINT DEFAULT 0
             )
         `);
-        await connection.query(`
+        await conn.query(`
             CREATE TABLE IF NOT EXISTS web_logs (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 target_id VARCHAR(32),
@@ -71,7 +81,7 @@ async function initDB() {
                 date DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         `);
-        await connection.query(`
+        await conn.query(`
             CREATE TABLE IF NOT EXISTS web_economy_logs (
                 id INT AUTO_INCREMENT PRIMARY KEY,
                 user_id VARCHAR(32),
@@ -83,9 +93,9 @@ async function initDB() {
                 date DATETIME DEFAULT CURRENT_TIMESTAMP
             )
         `);
-        connection.release();
-        console.log("✅ Web Panel Tables Verified");
-    } catch (err) { console.error("❌ Checks/Logs DB Config Error:", err.message); }
+        conn.release();
+        console.log("✅ Checks/Logs DB Connected & Tables Verified");
+    } catch (err) { console.error("❌ Checks/Logs DB Error:", err.message); }
 }
 
 initDB();
@@ -106,31 +116,37 @@ app.use(cors({ origin: true, credentials: true }));
 app.use(express.json());
 
 const client = new Client({
-    // REMOVED GatewayIntentBits.GuildPresences to prevent hanging if intent is missing in Dev Portal
+    // We NEED GuildMembers to fetch staff list properly. 
+    // IF THIS FAILS: User must enable "Server Members Intent" in Discord Developer Portal.
     intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers, GatewayIntentBits.DirectMessages],
     partials: [Partials.Channel, Partials.Message] 
 });
 
-client.on('debug', (info) => {
-    // console.log(`[DISCORD DEBUG] ${info}`); // Uncomment for verbose debug
+// Capture generic errors to prevent crashes
+client.on('error', (error) => {
+    console.error('❌ Discord Client Error:', error);
 });
 
-if (!DISCORD_BOT_TOKEN) {
-    console.error("❌❌❌ CRITICAL ERROR: DISCORD_BOT_TOKEN IS MISSING IN ENV! ❌❌❌");
-} else {
-    console.log("🔑 Initializing Bot with token from Environment...");
+client.on('warn', (info) => {
+    console.log('⚠️ Discord Client Warning:', info);
+});
+
+if (DISCORD_BOT_TOKEN) {
+    console.log("🔄 Attempting to login to Discord...");
     client.login(DISCORD_BOT_TOKEN)
-        .then(() => console.log("✅ Login Promise Resolved."))
+        .then(() => console.log("✅ Discord Login Successful!"))
         .catch(err => {
             console.error("❌ FATAL LOGIN ERROR:", err.message);
-            if (err.code === 'TokenInvalid') console.error("👉 Check Token in Render Environment Variables.");
-            if (err.code === 'DisallowedIntents') console.error("👉 Enable SERVER MEMBERS INTENT in Discord Dev Portal.");
+            if (err.code === 'DisallowedIntents') {
+                console.error("!!! URGENT: You must enable 'Server Members Intent' in the Discord Developer Portal for this bot !!!");
+            }
         });
+} else {
+    console.error("❌ NO TOKEN PROVIDED. Bot will not function.");
 }
 
 client.once('ready', () => {
-    console.log(`✅ BOT ONLINE: ${client.user.tag}`);
-    console.log(`✅ Monitoring Guild ID: ${GUILD_ID}`);
+    console.log(`✅ BOT READY: ${client.user.tag}`);
 });
 
 // === HELPER FUNCTIONS ===
@@ -172,45 +188,32 @@ async function logActionToDiscord(action, targetUser, adminUser, reason, details
             )
             .setTimestamp();
         await channel.send({ embeds: [embed] });
-    } catch (e) { console.error("Discord Log error:", e); }
+    } catch (e) { console.error("Discord Log error:", e.message); }
 }
 
 function formatDateForMySQL(date) { return date.toISOString().slice(0, 19).replace('T', ' '); }
 
-async function waitForReady(timeout = 5000) {
-    if (client.isReady()) return true;
-    console.log("⏳ Waiting for bot to be ready...");
-    return new Promise(resolve => {
-        let isResolved = false;
-        const onReady = () => { if (!isResolved) { isResolved = true; resolve(true); } };
-        setTimeout(() => {
-            if (!isResolved) {
-                isResolved = true;
-                console.log("⚠️ Bot wait timeout reached. Proceeding anyway.");
-                client.off('ready', onReady); 
-                resolve(false);
-            }
-        }, timeout);
-        client.once('ready', onReady);
-    });
-}
-
 // === API ROUTES ===
 app.get('/api/staff', async (req, res) => {
-    // Reduced timeout to 4s to respond faster if bot is dead
-    const isReady = await waitForReady(4000); 
+    // We removed the blocking waitForReady. We try to fetch directly.
+    // If the bot isn't ready, the REST call might still work if the token is valid.
     
+    if (!client.isReady()) {
+        console.log("⚠️ /api/staff called but Bot is not ready yet. Attempting fetch anyway...");
+    }
+
     try {
         const guild = await client.guilds.fetch(GUILD_ID).catch((e) => {
             console.error(`Failed to fetch guild ${GUILD_ID}:`, e.message);
-            return null;
+            throw new Error("Guild not accessible");
         });
 
-        if (!guild) return res.status(500).json({ error: 'Bot not connected to Guild. Check Bot Logs.' });
+        if (!guild) return res.status(500).json({ error: 'Bot cannot access Guild' });
         
-        // Removed withPresences: true since we removed the intent
-        await guild.members.fetch().catch(e => console.error("Member fetch failed:", e.message));
+        // Fetch all members. This is expensive but necessary for the full list.
+        await guild.members.fetch().catch(e => console.error("Member fetch warning:", e.message));
         
+        // Filter from cache
         const staffMembers = guild.members.cache.filter(member => member.roles.cache.has(STAFF_ROLE_ID));
         
         let dbUsers = [], dbLogs = [];
@@ -219,7 +222,9 @@ app.get('/api/staff', async (req, res) => {
                  [dbUsers] = await checksPool.query('SELECT * FROM web_users');
                  [dbLogs] = await checksPool.query('SELECT target_id, action FROM web_logs');
              }
-        } catch (dbErr) {}
+        } catch (dbErr) {
+            console.error("DB Fetch Error in staff route:", dbErr.message);
+        }
 
         const result = staffMembers.map(m => {
             const userDb = dbUsers.find(u => u.discord_id === m.id) || {};
@@ -228,17 +233,19 @@ app.get('/api/staff', async (req, res) => {
             return {
                 id: m.id, username: m.user.username, displayName: m.displayName, avatar: m.user.avatar,
                 roles: m.roles.cache.map(r => r.id), 
-                status: 'online', // Default to online since we disabled presences
+                status: m.presence ? m.presence.status : 'online', // Fallback to online if presence intent missing
                 loa: TEMP_DB.loa[m.id] || null, 
                 minecraftNick: userDb.minecraft_nick || null,
                 bannerUrl: userDb.banner_url || null, warnCount: activeWarns, 
                 balance: userDb.balance !== undefined ? userDb.balance : 5000
             };
         });
+        
+        // console.log(`Returning ${result.length} staff members`);
         res.json(result);
     } catch (error) { 
-        console.error("Staff Fetch Error:", error);
-        res.json([]);
+        console.error("Staff Fetch Error:", error.message);
+        res.status(500).json({ error: "Failed to load staff list", details: error.message });
     }
 });
 
