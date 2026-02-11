@@ -11,8 +11,8 @@ import {
 // ==========================================
 // CONFIGURATION
 // ==========================================
-// Используем ID, который ты скинул
-const DISCORD_CLIENT_ID = '1471232949880881287'; 
+// NEW ID from User
+const DISCORD_CLIENT_ID = '1459195079930675292'; 
 const TARGET_GUILD_ID = '1458138848822431770'; 
 const STAFF_ROLE_ID = '1458158245700046901';
 const CURATOR_ROLE_ID = '1458277039399374991';
