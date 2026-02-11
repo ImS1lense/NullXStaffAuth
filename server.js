@@ -39,7 +39,6 @@ const CHECKS_DB_CONFIG = {
 let litebansPool = null;
 let checksPool = null;
 
-// Initialize Databases
 async function initDB() {
     try {
         litebansPool = mysql.createPool(LITEBANS_DB_CONFIG);
@@ -49,7 +48,6 @@ async function initDB() {
     try {
         checksPool = mysql.createPool(CHECKS_DB_CONFIG);
         console.log("✅ Checks/Logs DB Pool Initialized");
-
         const connection = await checksPool.getConnection();
         
         await connection.query(`
@@ -90,21 +88,14 @@ async function initDB() {
 
         connection.release();
         console.log("✅ Web Panel Tables Verified");
-
-    } catch (err) {
-        console.error("❌ Checks/Logs DB Config Error:", err.message);
-    }
+    } catch (err) { console.error("❌ Checks/Logs DB Config Error:", err.message); }
 }
 
 initDB();
 
 const RANK_ROLE_IDS = [
-    "1459285694458626222", // Trainee
-    "1458158059187732666", // Jr. Mod
-    "1458158896894967879", // Moderator
-    "1458159110720589944", // Sr. Mod
-    "1458159802105594061", // Chief
-    "1458277039399374991"  // Curator
+    "1459285694458626222", "1458158059187732666", "1458158896894967879",
+    "1458159110720589944", "1458159802105594061", "1458277039399374991"
 ];
 
 const ALLOWED_ADMIN_IDS = [
@@ -122,30 +113,45 @@ const client = new Client({
     partials: [Partials.Channel, Partials.Message] 
 });
 
+// === DIAGNOSTIC LOGGING ===
+client.on('debug', (info) => {
+    // Filter out heartbeat messages to reduce noise, keep important connection info
+    if (!info.includes('Heartbeat') && !info.includes('heartbeat')) {
+        console.log(`[DISCORD DEBUG] ${info}`);
+    }
+});
+
 // === BOT INITIALIZATION ===
-if (DISCORD_BOT_TOKEN) {
-    console.log("🔑 Logging in to Discord... (Token is set)");
-    client.login(DISCORD_BOT_TOKEN)
-        .then(() => console.log("✅ Login Promise Resolved. Waiting for Ready..."))
-        .catch(err => {
-            console.error("❌ FATAL LOGIN ERROR:", err.message);
-            console.error("👉 Check if Token is correct in Render Environment Variables.");
-            console.error("👉 Check if Privileged Intents are enabled in Discord Dev Portal.");
-        });
+if (!DISCORD_BOT_TOKEN) {
+    console.error("❌❌❌ CRITICAL ERROR: DISCORD_BOT_TOKEN IS MISSING! ❌❌❌");
+    console.error("👉 Please go to Render Dashboard > Environment > Add Environment Variable");
+    console.error("👉 Key: DISCORD_BOT_TOKEN");
+    console.error("👉 Value: (Your Bot Token from Discord Developer Portal)");
 } else {
-    console.error("❌ ERROR: DISCORD_BOT_TOKEN is missing in Environment Variables!");
-    console.error("👉 Go to Render Dashboard -> Environment -> Add DISCORD_BOT_TOKEN");
+    // Check if token looks like a token (basic check)
+    if (!DISCORD_BOT_TOKEN.includes('.')) {
+        console.error("❌ CRITICAL: The provided token format looks wrong. It should look like 'Mxyz...abc.123'");
+    } else {
+        console.log(`🔑 Token found in Environment (Length: ${DISCORD_BOT_TOKEN.length} chars). Attempting login...`);
+        client.login(DISCORD_BOT_TOKEN)
+            .then(() => console.log("✅ Login Request Sent. Waiting for Gateway Ready..."))
+            .catch(err => {
+                console.error("❌ FATAL LOGIN ERROR:", err.message);
+                if (err.code === 'TokenInvalid') {
+                    console.error("👉 The Token is INVALID. Reset it in Discord Developer Portal and update Render Env Vars.");
+                }
+            });
+    }
 }
 
 client.once('ready', () => {
-    console.log(`✅ BOT ONLINE: ${client.user.tag}`);
+    console.log(`✅✅✅ BOT SUCCESSFULLY ONLINE: ${client.user.tag} ✅✅✅`);
     console.log(`✅ Monitoring Guild ID: ${GUILD_ID}`);
 });
 
 client.on('error', (err) => console.error("❌ Discord Client Error:", err));
 
 // === HELPER FUNCTIONS ===
-
 async function getUserData(discordId, username = 'Unknown') {
     if (!checksPool) return { balance: 5000, minecraft_nick: null, banner_url: null, last_withdraw: 0 };
     try {
@@ -189,59 +195,37 @@ async function logActionToDiscord(action, targetUser, adminUser, reason, details
 
 function formatDateForMySQL(date) { return date.toISOString().slice(0, 19).replace('T', ' '); }
 
-// === ROBUST WAIT FOR READY ===
-async function waitForReady(timeout = 10000) { // Increased to 10 seconds for slower hosts
+async function waitForReady(timeout = 10000) {
     if (client.isReady()) return true;
     console.log("⏳ Waiting for bot to be ready...");
     
     return new Promise(resolve => {
         let isResolved = false;
-
-        const onReady = () => {
-            if (isResolved) return;
-            isResolved = true;
-            console.log("✅ Bot became ready during wait.");
-            resolve(true);
-        };
-
-        const timeoutId = setTimeout(() => {
-            if (isResolved) return;
-            isResolved = true;
-            console.log("⚠️ Bot wait timeout reached. Proceeding without bot.");
-            client.off('ready', onReady); 
-            resolve(false);
+        const onReady = () => { if (!isResolved) { isResolved = true; resolve(true); } };
+        setTimeout(() => {
+            if (!isResolved) {
+                isResolved = true;
+                console.log("⚠️ Bot wait timeout reached.");
+                client.off('ready', onReady); 
+                resolve(false);
+            }
         }, timeout);
-        
         client.once('ready', onReady);
     });
 }
 
 // === API ROUTES ===
-
 app.get('/api/staff', async (req, res) => {
-    // Wait max 10 seconds to avoid blocking site load too long, but giving bot a chance
-    const isReady = await waitForReady(10000);
-    
-    // If bot failed, return empty list so site loads
-    if (!isReady) {
-         console.warn("⚠️ Bot not ready. Returning empty list.");
-         return res.json([]); 
-    }
+    const isReady = await waitForReady(5000); // 5 sec wait is enough
+    if (!isReady) return res.json([]); 
     
     try {
-        const guild = await client.guilds.fetch(GUILD_ID).catch((e) => {
-            console.error(`Failed to fetch guild ${GUILD_ID}:`, e.message);
-            return null;
-        });
-
+        const guild = await client.guilds.fetch(GUILD_ID).catch((e) => null);
         if (!guild) return res.status(404).json({ error: 'Bot is not in the target server' });
-        
         await guild.members.fetch({ withPresences: true }).catch(e => console.error("Member fetch failed:", e.message));
-        
         const staffMembers = guild.members.cache.filter(member => member.roles.cache.has(STAFF_ROLE_ID));
         
-        let dbUsers = [];
-        let dbLogs = [];
+        let dbUsers = [], dbLogs = [];
         try {
              if (checksPool) {
                  [dbUsers] = await checksPool.query('SELECT * FROM web_users');
@@ -253,24 +237,20 @@ app.get('/api/staff', async (req, res) => {
             const userDb = dbUsers.find(u => u.discord_id === m.id) || {};
             const userLogs = dbLogs.filter(l => l.target_id === m.id);
             const activeWarns = Math.max(0, userLogs.filter(l => l.action === 'warn').length - userLogs.filter(l => l.action === 'unwarn').length);
-
             return {
                 id: m.id, username: m.user.username, displayName: m.displayName, avatar: m.user.avatar,
                 roles: m.roles.cache.map(r => r.id), status: m.presence ? m.presence.status : 'offline',
                 loa: TEMP_DB.loa[m.id] || null, 
                 minecraftNick: userDb.minecraft_nick || null,
-                bannerUrl: userDb.banner_url || null, 
-                warnCount: activeWarns, 
+                bannerUrl: userDb.banner_url || null, warnCount: activeWarns, 
                 balance: userDb.balance !== undefined ? userDb.balance : 5000
             };
         });
         res.json(result);
-    } catch (error) { 
-        console.error("Staff Fetch Error:", error);
-        res.json([]);
-    }
+    } catch (error) { console.error("Staff Fetch Error:", error); res.json([]); }
 });
 
+// ... (Остальные роуты без изменений)
 app.post('/api/economy/withdraw', async (req, res) => {
     const { userId, amount, minecraftNick } = req.body;
     if (!userId || !amount || !minecraftNick) return res.status(400).json({ error: "Missing parameters" });
@@ -346,7 +326,6 @@ app.get('/api/stats/:ign', async (req, res) => {
             const [playtimeRows] = await checksPool.query(`SELECT SUM(TIMESTAMPDIFF(SECOND, enterDate, exitDate)) as total_seconds FROM online_logs WHERE player = ? AND enterDate >= ? AND exitDate IS NOT NULL`, [ign, mysqlDateString]);
             stats.playtimeSeconds = parseInt(playtimeRows[0]?.total_seconds || 0);
         }
-        // Simplified history fetch for brevity
         res.json(stats);
     } catch (error) { res.json(stats); }
 });
