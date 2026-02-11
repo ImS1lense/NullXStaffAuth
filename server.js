@@ -7,8 +7,8 @@ const { Client, GatewayIntentBits, Partials, EmbedBuilder, ActionRowBuilder, But
 const app = express();
 const PORT = process.env.PORT || 4000;
 
-// === TOKEN FROM ENV ONLY ===
-const DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN;
+// === TOKEN FROM ENV ONLY (Trimmed to remove accidental spaces) ===
+const DISCORD_BOT_TOKEN = process.env.DISCORD_BOT_TOKEN ? process.env.DISCORD_BOT_TOKEN.trim() : null;
 
 const GUILD_ID = process.env.GUILD_ID || '1458138848822431770'; 
 const LOG_CHANNEL_ID = '1458163321302945946'; 
@@ -106,12 +106,13 @@ app.use(cors({ origin: true, credentials: true }));
 app.use(express.json());
 
 const client = new Client({
-    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers, GatewayIntentBits.DirectMessages, GatewayIntentBits.GuildPresences],
+    // REMOVED GatewayIntentBits.GuildPresences to prevent hanging if intent is missing in Dev Portal
+    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers, GatewayIntentBits.DirectMessages],
     partials: [Partials.Channel, Partials.Message] 
 });
 
 client.on('debug', (info) => {
-    if (!info.includes('Heartbeat')) console.log(`[DISCORD DEBUG] ${info}`);
+    // console.log(`[DISCORD DEBUG] ${info}`); // Uncomment for verbose debug
 });
 
 if (!DISCORD_BOT_TOKEN) {
@@ -123,7 +124,7 @@ if (!DISCORD_BOT_TOKEN) {
         .catch(err => {
             console.error("❌ FATAL LOGIN ERROR:", err.message);
             if (err.code === 'TokenInvalid') console.error("👉 Check Token in Render Environment Variables.");
-            if (err.code === 'DisallowedIntents') console.error("👉 Enable PRESENCE INTENT & SERVER MEMBERS INTENT in Discord Dev Portal.");
+            if (err.code === 'DisallowedIntents') console.error("👉 Enable SERVER MEMBERS INTENT in Discord Dev Portal.");
         });
 }
 
@@ -176,7 +177,7 @@ async function logActionToDiscord(action, targetUser, adminUser, reason, details
 
 function formatDateForMySQL(date) { return date.toISOString().slice(0, 19).replace('T', ' '); }
 
-async function waitForReady(timeout = 10000) {
+async function waitForReady(timeout = 5000) {
     if (client.isReady()) return true;
     console.log("⏳ Waiting for bot to be ready...");
     return new Promise(resolve => {
@@ -196,7 +197,8 @@ async function waitForReady(timeout = 10000) {
 
 // === API ROUTES ===
 app.get('/api/staff', async (req, res) => {
-    const isReady = await waitForReady(8000); 
+    // Reduced timeout to 4s to respond faster if bot is dead
+    const isReady = await waitForReady(4000); 
     
     try {
         const guild = await client.guilds.fetch(GUILD_ID).catch((e) => {
@@ -204,9 +206,10 @@ app.get('/api/staff', async (req, res) => {
             return null;
         });
 
-        if (!guild) return res.status(404).json({ error: 'Bot not connected to Guild' });
+        if (!guild) return res.status(500).json({ error: 'Bot not connected to Guild. Check Bot Logs.' });
         
-        await guild.members.fetch({ withPresences: true }).catch(e => console.error("Member fetch failed:", e.message));
+        // Removed withPresences: true since we removed the intent
+        await guild.members.fetch().catch(e => console.error("Member fetch failed:", e.message));
         
         const staffMembers = guild.members.cache.filter(member => member.roles.cache.has(STAFF_ROLE_ID));
         
@@ -224,7 +227,8 @@ app.get('/api/staff', async (req, res) => {
             const activeWarns = Math.max(0, userLogs.filter(l => l.action === 'warn').length - userLogs.filter(l => l.action === 'unwarn').length);
             return {
                 id: m.id, username: m.user.username, displayName: m.displayName, avatar: m.user.avatar,
-                roles: m.roles.cache.map(r => r.id), status: m.presence ? m.presence.status : 'offline',
+                roles: m.roles.cache.map(r => r.id), 
+                status: 'online', // Default to online since we disabled presences
                 loa: TEMP_DB.loa[m.id] || null, 
                 minecraftNick: userDb.minecraft_nick || null,
                 bannerUrl: userDb.banner_url || null, warnCount: activeWarns, 
