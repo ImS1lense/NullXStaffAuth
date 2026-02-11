@@ -13,7 +13,6 @@ const STAFF_ROLE_ID = '1458158245700046901';
 
 // === DATABASE CONFIGURATION ===
 
-// 1. LiteBans Database (Bans & Mutes)
 const LITEBANS_DB_CONFIG = {
     host: process.env.DB_HOST || 'panel.nullx.space',
     user: process.env.DB_USER || 'u1_FAXro5fVCj',
@@ -24,37 +23,83 @@ const LITEBANS_DB_CONFIG = {
     queueLimit: 0
 };
 
-// 2. Checks & Online Database (ReviseLogs & OnlineLogs & Commands)
 const CHECKS_DB_CONFIG = {
     host: 'panel.nullx.space', 
     user: 'u1_McHWJLbCr4',
     password: 'J3K1qTw61BZpp!y.sbLrlpvt',
-    database: 's1_logs', // Changed from s1_auth to s1_logs
+    database: 's1_logs', 
     port: 3306,
     waitForConnections: true,
     connectionLimit: 10,
     queueLimit: 0
 };
 
-// Initialize Pools
 let litebansPool = null;
 let checksPool = null;
 
-try {
-    litebansPool = mysql.createPool(LITEBANS_DB_CONFIG);
-    console.log("✅ LiteBans DB Pool Initialized");
-} catch (err) {
-    console.error("❌ LiteBans DB Config Error:", err.message);
+// Initialize Databases and Create Tables
+async function initDB() {
+    try {
+        litebansPool = mysql.createPool(LITEBANS_DB_CONFIG);
+        console.log("✅ LiteBans DB Pool Initialized");
+    } catch (err) { console.error("❌ LiteBans Config Error:", err.message); }
+
+    try {
+        checksPool = mysql.createPool(CHECKS_DB_CONFIG);
+        console.log("✅ Checks/Logs DB Pool Initialized");
+
+        // Create persistent tables for the Website Panel
+        const connection = await checksPool.getConnection();
+        
+        // 1. Users Table (Balances, Nicks, Banners)
+        await connection.query(`
+            CREATE TABLE IF NOT EXISTS web_users (
+                discord_id VARCHAR(32) PRIMARY KEY,
+                username VARCHAR(64),
+                minecraft_nick VARCHAR(64),
+                balance INT DEFAULT 5000,
+                banner_url TEXT,
+                last_withdraw BIGINT DEFAULT 0
+            )
+        `);
+
+        // 2. Logs Table (Panel Actions)
+        await connection.query(`
+            CREATE TABLE IF NOT EXISTS web_logs (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                target_id VARCHAR(32),
+                admin_id VARCHAR(32),
+                action VARCHAR(32),
+                reason TEXT,
+                details TEXT,
+                date DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
+
+        // 3. Economy Logs
+        await connection.query(`
+            CREATE TABLE IF NOT EXISTS web_economy_logs (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                user_id VARCHAR(32),
+                executor_id VARCHAR(32),
+                type VARCHAR(32),
+                amount INT,
+                details TEXT,
+                source VARCHAR(64),
+                date DATETIME DEFAULT CURRENT_TIMESTAMP
+            )
+        `);
+
+        connection.release();
+        console.log("✅ Web Panel Tables Verified (web_users, web_logs, web_economy_logs)");
+
+    } catch (err) {
+        console.error("❌ Checks/Logs DB Config Error:", err.message);
+    }
 }
 
-try {
-    checksPool = mysql.createPool(CHECKS_DB_CONFIG);
-    console.log("✅ Checks/Logs DB Pool Initialized");
-} catch (err) {
-    console.error("❌ Checks/Logs DB Config Error:", err.message);
-}
+initDB();
 
-// Roles sorted from Lowest (0) to Highest (5)
 const RANK_ROLE_IDS = [
     "1459285694458626222", // Trainee
     "1458158059187732666", // Jr. Mod
@@ -69,23 +114,18 @@ const ALLOWED_ADMIN_IDS = [
     '1455582084893642998', '846540575032344596', '1468330580910542868'
 ];
 
-// === MOCK DATABASE (IN-MEMORY) ===
-const MOCK_DB = {
-    logs: [], // { id, targetId, adminId, action, reason, date }
-    loa: {},   // { userId: { start: timestamp, end: timestamp, active: boolean, reason: string } }
-    loaRequests: [], // { id, userId, username, duration, reason, date }
-    appeals: [], // { id, userId, warnId (optional), text, status: 'pending'|'approved'|'rejected', date }
-    minecraftNicks: {}, // { userId: "Nickname" }
-    banners: {}, // { userId: "https://image.url" }
-    balances: {}, // { userId: amount } (Virtual salary)
-    lastWithdraw: {}, // { userId: timestamp }
-    economyLogs: [] // { id, userId, executorId, type, amount, date, details, source }
+// === MOCK DB (Only for temporary non-critical data like Appeals/LOA for now) ===
+// Critical data (Money, Logs, Nicks) is now in MySQL
+const TEMP_DB = {
+    loa: {},   
+    loaRequests: [], 
+    appeals: [], 
 };
 
 app.use(cors({
     origin: function (origin, callback) {
         if (!origin) return callback(null, true);
-        if (origin.includes('vercel.app') || origin.includes('localhost')) {
+        if (origin.includes('vercel.app') || origin.includes('localhost') || origin.includes('render.com')) {
             return callback(null, true);
         }
         return callback(new Error('Not allowed by CORS'));
@@ -96,91 +136,47 @@ app.use(cors({
 app.use(express.json());
 
 const client = new Client({
-    intents: [
-        GatewayIntentBits.Guilds,
-        GatewayIntentBits.GuildMembers, 
-        GatewayIntentBits.DirectMessages,
-        GatewayIntentBits.GuildPresences 
-    ],
+    intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers, GatewayIntentBits.DirectMessages, GatewayIntentBits.GuildPresences],
     partials: [Partials.Channel, Partials.Message] 
 });
 
-if (!process.env.DISCORD_BOT_TOKEN) {
-    console.error("❌ ОШИБКА: Нет токена!");
-} else {
+if (process.env.DISCORD_BOT_TOKEN) {
     client.login(process.env.DISCORD_BOT_TOKEN).catch(err => console.error("❌ Auth Error:", err.message));
 }
+client.once('ready', () => console.log(`✅ Bot ready: ${client.user.tag}`));
 
-client.once('ready', () => {
-    console.log(`✅ Bot ready: ${client.user.tag}`);
-});
+// === HELPER FUNCTIONS FOR DB ===
 
-// === INTERACTION HANDLER FOR EXCUSES ===
-client.on(Events.InteractionCreate, async interaction => {
+async function getUserData(discordId, username = 'Unknown') {
+    if (!checksPool) return { balance: 5000, minecraft_nick: null, banner_url: null, last_withdraw: 0 };
     try {
-        if (interaction.isButton()) {
-            if (interaction.customId === 'write_excuse') {
-                const modal = new ModalBuilder()
-                    .setCustomId('excuse_modal')
-                    .setTitle('Написать объяснительную');
-
-                const reasonInput = new TextInputBuilder()
-                    .setCustomId('excuse_reason')
-                    .setLabel("Причина / Оправдание")
-                    .setPlaceholder("Опишите ситуацию подробно...")
-                    .setStyle(TextInputStyle.Paragraph)
-                    .setRequired(true);
-
-                const firstActionRow = new ActionRowBuilder().addComponents(reasonInput);
-                modal.addComponents(firstActionRow);
-
-                await interaction.showModal(modal);
-            }
-        } 
-        else if (interaction.isModalSubmit()) {
-            if (interaction.customId === 'excuse_modal') {
-                const reason = interaction.fields.getTextInputValue('excuse_reason');
-                
-                // Save to DB
-                const appealObj = {
-                    id: Date.now().toString(),
-                    userId: interaction.user.id,
-                    username: interaction.user.username,
-                    text: reason,
-                    status: 'pending',
-                    date: new Date().toISOString()
-                };
-                MOCK_DB.appeals.push(appealObj);
-
-                await interaction.reply({ content: '✅ Ваша объяснительная отправлена руководству. Ожидайте решения.', ephemeral: true });
-
-                // Log to Discord Channel
-                const channel = await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
-                if (channel) {
-                    const embed = new EmbedBuilder()
-                        .setTitle('📝 ПОЛУЧЕНА ОБЪЯСНИТЕЛЬНАЯ')
-                        .setColor(0x3B82F6) 
-                        .addFields(
-                            { name: 'От сотрудника', value: `<@${interaction.user.id}> (${interaction.user.tag})`, inline: true },
-                            { name: 'Текст', value: reason }
-                        )
-                        .setTimestamp();
-                    await channel.send({ embeds: [embed] });
-                }
-            }
+        const [rows] = await checksPool.query('SELECT * FROM web_users WHERE discord_id = ?', [discordId]);
+        if (rows.length === 0) {
+            await checksPool.query('INSERT INTO web_users (discord_id, username) VALUES (?, ?)', [discordId, username]);
+            return { balance: 5000, minecraft_nick: null, banner_url: null, last_withdraw: 0 };
         }
-    } catch (error) {
-        console.error("Interaction error:", error);
-    }
-});
+        return rows[0];
+    } catch (e) { console.error("DB GetUser Error:", e); return {}; }
+}
+
+async function updateUserBalance(discordId, newBalance) {
+    if (!checksPool) return;
+    await checksPool.query('UPDATE web_users SET balance = ? WHERE discord_id = ?', [newBalance, discordId]);
+}
+
+async function addWebLog(targetId, adminId, action, reason, details) {
+    if (!checksPool) return;
+    try {
+        await checksPool.query('INSERT INTO web_logs (target_id, admin_id, action, reason, details) VALUES (?, ?, ?, ?, ?)', 
+            [targetId, adminId, action, reason, details]);
+    } catch (e) { console.error("Log Insert Error:", e); }
+}
 
 async function logActionToDiscord(action, targetUser, adminUser, reason, details = "") {
     try {
         const channel = await client.channels.fetch(LOG_CHANNEL_ID).catch(() => null);
         if (!channel) return;
-
         const colorMap = { promote: 0x34D399, demote: 0xF97316, kick: 0xEF4444, warn: 0xEAB308, unwarn: 0x6366F1, hire: 0x3B82F6, loa: 0x9333EA };
-
         const embed = new EmbedBuilder()
             .setTitle(`ACTION: ${action.toUpperCase()}`)
             .setColor(colorMap[action] || 0x808080)
@@ -191,569 +187,289 @@ async function logActionToDiscord(action, targetUser, adminUser, reason, details
                 { name: 'Details', value: details || 'None' }
             )
             .setTimestamp();
-
         await channel.send({ embeds: [embed] });
-    } catch (e) { console.error("Log error:", e); }
+    } catch (e) { console.error("Discord Log error:", e); }
 }
 
-function formatDateForMySQL(date) {
-    return date.toISOString().slice(0, 19).replace('T', ' ');
-}
+function formatDateForMySQL(date) { return date.toISOString().slice(0, 19).replace('T', ' '); }
 
 // === API Routes ===
 
-// --- ECONOMY / WITHDRAWAL ---
 app.post('/api/economy/withdraw', async (req, res) => {
     const { userId, amount, minecraftNick } = req.body;
-    
-    if (!userId || !amount || !minecraftNick) {
-        return res.status(400).json({ error: "Missing parameters" });
-    }
+    if (!userId || !amount || !minecraftNick) return res.status(400).json({ error: "Missing parameters" });
 
-    // 1. Check Cooldown (24 hours)
-    const lastTime = MOCK_DB.lastWithdraw[userId] || 0;
+    const userData = await getUserData(userId);
+    const lastTime = userData.last_withdraw || 0;
     const now = Date.now();
-    const COOLDOWN = 24 * 60 * 60 * 1000; // 24 hours in ms
+    const COOLDOWN = 24 * 60 * 60 * 1000;
 
     if (now - lastTime < COOLDOWN) {
         const remaining = Math.ceil((COOLDOWN - (now - lastTime)) / (1000 * 60 * 60));
         return res.status(400).json({ error: `Вывод доступен через ${remaining} ч.` });
     }
 
-    // 2. Check Balance
-    const currentBalance = MOCK_DB.balances[userId] || 0;
-    if (amount > currentBalance) {
-        return res.status(400).json({ error: "Недостаточно средств" });
-    }
-
-    // 3. Database Check
-    if (!checksPool) {
-         return res.status(503).json({ error: "Ошибка подключения к базе данных (Выдача)" });
-    }
+    if (amount > userData.balance) return res.status(400).json({ error: "Недостаточно средств" });
+    if (!checksPool) return res.status(503).json({ error: "DB Error" });
 
     try {
-        // 4. Optimistic Deduction
-        MOCK_DB.balances[userId] = currentBalance - amount;
-        MOCK_DB.lastWithdraw[userId] = now;
+        // 1. Deduct Balance
+        const newBalance = userData.balance - amount;
+        await checksPool.query('UPDATE web_users SET balance = ?, last_withdraw = ? WHERE discord_id = ?', [newBalance, now, userId]);
 
-        // 5. Execute MySQL Command
-        // Command format: p give {user} {sum}
-        const commandStr = `p give ${minecraftNick} ${amount}`;
-        
-        // Use checksPool because it connects to s1_logs where 'commands' table is
-        await checksPool.query(
-            'INSERT INTO commands (command) VALUES (?)',
-            [commandStr]
-        );
+        // 2. Execute Command
+        await checksPool.query('INSERT INTO commands (command) VALUES (?)', [`p give ${minecraftNick} ${amount}`]);
 
-        // 6. Log Transaction
-        MOCK_DB.economyLogs.push({
-            id: Date.now().toString(),
-            userId,
-            executorId: userId, // Self
-            type: 'WITHDRAW',
-            amount: -amount,
-            date: new Date().toISOString(),
-            details: `Вывод на IGN: ${minecraftNick}`,
-            source: 'Личный кабинет'
-        });
+        // 3. Log
+        await checksPool.query('INSERT INTO web_economy_logs (user_id, executor_id, type, amount, details, source) VALUES (?, ?, ?, ?, ?, ?)',
+            [userId, userId, 'WITHDRAW', -amount, `Вывод на IGN: ${minecraftNick}`, 'Личный кабинет']);
 
-        console.log(`[Economy] Withdrawal success: ${amount} Ametrines to ${minecraftNick} (Cmd: ${commandStr})`);
-
-        res.json({ 
-            success: true, 
-            newBalance: MOCK_DB.balances[userId],
-            message: `Успешно выведено ${amount} Аметринов на аккаунт ${minecraftNick}` 
-        });
-
+        res.json({ success: true, newBalance, message: `Успешно выведено ${amount} Аметринов на аккаунт ${minecraftNick}` });
     } catch (error) {
-        console.error("[Economy] Withdrawal Error:", error);
-
-        // Rollback
-        MOCK_DB.balances[userId] = currentBalance;
-        MOCK_DB.lastWithdraw[userId] = lastTime; // Reset cooldown
-
-        res.status(500).json({ error: "Ошибка базы данных. Средства возвращены." });
+        console.error("Withdraw Error:", error);
+        // Try rollback balance
+        await checksPool.query('UPDATE web_users SET balance = ? WHERE discord_id = ?', [userData.balance, userId]);
+        res.status(500).json({ error: "Ошибка базы данных." });
     }
 });
 
-// --- ECONOMY / ADMIN MANAGE ---
-app.post('/api/economy/manage', (req, res) => {
-    const { adminId, targetId, amount, action } = req.body; // action: 'give' | 'take' | 'set'
+app.post('/api/economy/manage', async (req, res) => {
+    const { adminId, targetId, amount, action } = req.body;
+    if (!ALLOWED_ADMIN_IDS.includes(adminId)) return res.status(403).json({ error: "Доступ запрещен" });
 
-    if (!ALLOWED_ADMIN_IDS.includes(adminId)) {
-        return res.status(403).json({ error: "Доступ запрещен" });
-    }
-
-    if (!MOCK_DB.balances[targetId]) MOCK_DB.balances[targetId] = 0;
-    
-    let oldBalance = MOCK_DB.balances[targetId];
-    let newBalance = oldBalance;
-    let logType = '';
+    const userData = await getUserData(targetId);
+    let newBalance = userData.balance;
     let logAmount = 0;
-    let source = 'Администрация';
+    let type = 'INCOME';
 
-    if (action === 'give') {
-        newBalance = oldBalance + amount;
-        logType = 'INCOME';
-        logAmount = amount;
-        source = 'Пополнение счета (Зарплата)';
-    } else if (action === 'take') {
-        newBalance = Math.max(0, oldBalance - amount);
-        logType = 'WITHDRAW';
-        logAmount = -amount;
-        source = 'Списание средств (Штраф)';
-    } else if (action === 'set') {
-        newBalance = amount;
-        logType = 'INCOME';
-        logAmount = amount; // For SET, amount is the new absolute value (simplified log)
-        source = 'Корректировка баланса';
-    }
+    if (action === 'give') { newBalance += amount; logAmount = amount; }
+    else if (action === 'take') { newBalance = Math.max(0, newBalance - amount); logAmount = -amount; type = 'WITHDRAW'; }
+    else if (action === 'set') { newBalance = amount; logAmount = amount; }
 
-    MOCK_DB.balances[targetId] = newBalance;
-
-    MOCK_DB.economyLogs.push({
-        id: Date.now().toString(),
-        userId: targetId,
-        executorId: adminId,
-        type: logType,
-        amount: logAmount,
-        date: new Date().toISOString(),
-        details: `Действие администратора (${action})`,
-        source: source
-    });
+    await updateUserBalance(targetId, newBalance);
+    await checksPool.query('INSERT INTO web_economy_logs (user_id, executor_id, type, amount, details, source) VALUES (?, ?, ?, ?, ?, ?)',
+        [targetId, adminId, type, logAmount, `Admin: ${action}`, 'Администрация']);
 
     res.json({ success: true, newBalance });
 });
 
-app.get('/api/economy/history/:userId', (req, res) => {
-    const userId = req.params.userId;
-    // Filter logs where this user is the target
-    const logs = MOCK_DB.economyLogs.filter(l => l.userId === userId).reverse();
-    const lastWithdraw = MOCK_DB.lastWithdraw[userId] || 0;
-    res.json({ logs, lastWithdraw });
+app.get('/api/economy/history/:userId', async (req, res) => {
+    if (!checksPool) return res.json({ logs: [], lastWithdraw: 0 });
+    const [logs] = await checksPool.query('SELECT * FROM web_economy_logs WHERE user_id = ? ORDER BY date DESC LIMIT 50', [req.params.userId]);
+    const userData = await getUserData(req.params.userId);
+    res.json({ logs, lastWithdraw: userData.last_withdraw });
 });
 
-// --- STATS ENDPOINT ---
 app.get('/api/stats/:ign', async (req, res) => {
     const ign = req.params.ign;
-    const range = req.query.range || 'all'; // 'week', 'month', 'all'
-    
-    // Default stats
-    let stats = {
-        bans: 0,
-        mutes: 0,
-        checks: 0, 
-        playtimeSeconds: 0,
-        history: [] 
-    };
-
-    if (!ign || ign === 'undefined') {
-        return res.json(stats);
-    }
+    const range = req.query.range || 'all';
+    let stats = { bans: 0, mutes: 0, checks: 0, playtimeSeconds: 0, history: [] };
+    if (!ign || ign === 'undefined') return res.json(stats);
 
     try {
         let cutoffTime = 0;
-        let dateObj = new Date(0); // Epoch for 'all'
+        let dateObj = new Date(0); 
         const now = Date.now();
+        if (range === 'week') { cutoffTime = now - (604800000); dateObj = new Date(cutoffTime); }
+        else if (range === 'month') { cutoffTime = now - (2592000000); dateObj = new Date(cutoffTime); }
+        const mysqlDateString = formatDateForMySQL(dateObj);
 
-        if (range === 'week') {
-            cutoffTime = now - (7 * 24 * 60 * 60 * 1000);
-            dateObj = new Date(cutoffTime);
-        } else if (range === 'month') {
-            cutoffTime = now - (30 * 24 * 60 * 60 * 1000);
-            dateObj = new Date(cutoffTime);
-        }
-        
-        const mysqlDateString = formatDateForMySQL(dateObj); // Format: 'YYYY-MM-DD HH:mm:ss'
-
-        // --- LITEBANS QUERIES ---
         if (litebansPool) {
-            // 1. Bans Count
-            const [banRows] = await litebansPool.query(
-                'SELECT COUNT(*) as count FROM litebans_bans WHERE banned_by_name = ? AND time >= ?', 
-                [ign, cutoffTime]
-            );
+            const [banRows] = await litebansPool.query('SELECT COUNT(*) as count FROM litebans_bans WHERE banned_by_name = ? AND time >= ?', [ign, cutoffTime]);
             stats.bans = banRows[0]?.count || 0;
-
-            // 2. Mutes Count
-            const [muteRows] = await litebansPool.query(
-                'SELECT COUNT(*) as count FROM litebans_mutes WHERE banned_by_name = ? AND time >= ?', 
-                [ign, cutoffTime]
-            );
+            const [muteRows] = await litebansPool.query('SELECT COUNT(*) as count FROM litebans_mutes WHERE banned_by_name = ? AND time >= ?', [ign, cutoffTime]);
             stats.mutes = muteRows[0]?.count || 0;
         }
 
-        // --- CHECKS & ONLINE QUERIES ---
         if (checksPool) {
-            // 3. Checks Count (revise_logs)
-            // Table: revise_logs (id, date, admin, target, type)
-            const [checkCountRows] = await checksPool.query(
-                'SELECT COUNT(*) as count FROM revise_logs WHERE admin = ? AND date >= ?',
-                [ign, mysqlDateString]
-            );
+            const [checkCountRows] = await checksPool.query('SELECT COUNT(*) as count FROM revise_logs WHERE admin = ? AND date >= ?', [ign, mysqlDateString]);
             stats.checks = checkCountRows[0]?.count || 0;
-
-            // 4. Playtime (online_logs)
-            // Table: online_logs (id, player, enterDate, exitDate, ...)
-            // We sum the difference in seconds
-            const [playtimeRows] = await checksPool.query(
-                `SELECT SUM(TIMESTAMPDIFF(SECOND, enterDate, exitDate)) as total_seconds 
-                 FROM online_logs 
-                 WHERE player = ? 
-                 AND enterDate >= ? 
-                 AND exitDate IS NOT NULL`,
-                [ign, mysqlDateString]
-            );
+            const [playtimeRows] = await checksPool.query(`SELECT SUM(TIMESTAMPDIFF(SECOND, enterDate, exitDate)) as total_seconds FROM online_logs WHERE player = ? AND enterDate >= ? AND exitDate IS NOT NULL`, [ign, mysqlDateString]);
             stats.playtimeSeconds = parseInt(playtimeRows[0]?.total_seconds || 0);
         }
 
-        // --- HISTORY MERGING ---
-        let litebansHistory = [];
-        let checksHistory = [];
-
+        let lbH = [], chH = [];
         if (litebansPool) {
-            const [lbRows] = await litebansPool.query(
-                `
-                (SELECT 'ban' as type, reason, time, until, removed_by_name, banned_by_name as admin, NULL as target FROM litebans_bans WHERE banned_by_name = ? AND time >= ? ORDER BY time DESC)
-                UNION ALL
-                (SELECT 'mute' as type, reason, time, until, removed_by_name, banned_by_name as admin, NULL as target FROM litebans_mutes WHERE banned_by_name = ? AND time >= ? ORDER BY time DESC)
-                ORDER BY time DESC
-                `,
-                [ign, cutoffTime, ign, cutoffTime]
-            );
-            litebansHistory = lbRows.map(r => ({
-                ...r,
-                dateObj: new Date(parseInt(r.time)), // Convert bigInt ms to Date object
-                displayType: r.type.toUpperCase()
-            }));
+            const [lbRows] = await litebansPool.query(`(SELECT 'ban' as type, reason, time, until, removed_by_name, banned_by_name as admin, NULL as target FROM litebans_bans WHERE banned_by_name = ? AND time >= ? ORDER BY time DESC) UNION ALL (SELECT 'mute' as type, reason, time, until, removed_by_name, banned_by_name as admin, NULL as target FROM litebans_mutes WHERE banned_by_name = ? AND time >= ? ORDER BY time DESC) ORDER BY time DESC LIMIT 20`, [ign, cutoffTime, ign, cutoffTime]);
+            lbH = lbRows.map(r => ({ ...r, dateObj: new Date(parseInt(r.time)), displayType: r.type.toUpperCase() }));
         }
-
         if (checksPool) {
-            const [checkRows] = await checksPool.query(
-                'SELECT id, date, admin, target, type FROM revise_logs WHERE admin = ? AND date >= ? ORDER BY date DESC',
-                [ign, mysqlDateString]
-            );
-            checksHistory = checkRows.map(r => ({
-                type: 'CHECK',
-                displayType: r.type, // e.g., ANYDESK, DISCORD
-                reason: 'Проверка на читы',
-                time: new Date(r.date).getTime(), // Convert DateTime to ms
-                dateObj: new Date(r.date),
-                target: r.target,
-                admin: r.admin,
-                removed_by_name: null,
-                until: 0
-            }));
+            const [checkRows] = await checksPool.query('SELECT id, date, admin, target, type FROM revise_logs WHERE admin = ? AND date >= ? ORDER BY date DESC LIMIT 20', [ign, mysqlDateString]);
+            chH = checkRows.map(r => ({ type: 'CHECK', displayType: r.type, reason: 'Проверка на читы', time: new Date(r.date).getTime(), dateObj: new Date(r.date), target: r.target, admin: r.admin, removed_by_name: null, until: 0 }));
         }
-
-        // Merge and Sort
-        const combinedHistory = [...litebansHistory, ...checksHistory];
-        combinedHistory.sort((a, b) => b.dateObj - a.dateObj);
-        
-        stats.history = combinedHistory;
-
-    } catch (error) {
-        console.error(`[DB Error] Stats fetch for ${ign}:`, error);
-        // Return partial stats if something fails
-    }
-
+        stats.history = [...lbH, ...chH].sort((a, b) => b.dateObj - a.dateObj);
+    } catch (error) { console.error(error); }
     res.json(stats);
 });
 
 app.get('/api/staff', async (req, res) => {
     if (!client.isReady()) return res.status(503).json({ error: "Bot starting..." });
-
     try {
         const guild = await client.guilds.fetch(GUILD_ID).catch(() => null);
         if (!guild) return res.status(404).json({ error: 'Guild not found' });
-
-        // Ensure we fetch presences to show Online/Offline correctly
         await guild.members.fetch({ withPresences: true });
-
+        
         const staffMembers = guild.members.cache.filter(member => member.roles.cache.has(STAFF_ROLE_ID));
+        
+        // Fetch all web data at once
+        const [dbUsers] = checksPool ? await checksPool.query('SELECT * FROM web_users') : [[]];
+        const [dbLogs] = checksPool ? await checksPool.query('SELECT target_id, action FROM web_logs') : [[]];
 
         const result = staffMembers.map(m => {
-            // Calculate Active Warns
-            const userLogs = MOCK_DB.logs.filter(l => l.targetId === m.id);
-            const warns = userLogs.filter(l => l.action === 'warn').length;
-            const unwarns = userLogs.filter(l => l.action === 'unwarn').length;
-            const activeWarns = Math.max(0, warns - unwarns);
-
-            // Mock Balance Logic (Initialize if not present)
-            if (MOCK_DB.balances[m.id] === undefined) {
-                MOCK_DB.balances[m.id] = 5000; // Starting balance
-            }
+            const userDb = dbUsers.find(u => u.discord_id === m.id) || {};
+            const userLogs = dbLogs.filter(l => l.target_id === m.id);
+            const activeWarns = Math.max(0, userLogs.filter(l => l.action === 'warn').length - userLogs.filter(l => l.action === 'unwarn').length);
 
             return {
-                id: m.id,
-                username: m.user.username,
-                displayName: m.displayName,
-                avatar: m.user.avatar,
-                roles: m.roles.cache.map(r => r.id),
-                status: m.presence ? m.presence.status : 'offline',
-                loa: MOCK_DB.loa[m.id] || null,
-                minecraftNick: MOCK_DB.minecraftNicks[m.id] || null,
-                bannerUrl: MOCK_DB.banners[m.id] || null,
-                warnCount: activeWarns,
-                balance: MOCK_DB.balances[m.id]
+                id: m.id, username: m.user.username, displayName: m.displayName, avatar: m.user.avatar,
+                roles: m.roles.cache.map(r => r.id), status: m.presence ? m.presence.status : 'offline',
+                loa: TEMP_DB.loa[m.id] || null, 
+                minecraftNick: userDb.minecraft_nick || null,
+                bannerUrl: userDb.banner_url || null, 
+                warnCount: activeWarns, 
+                balance: userDb.balance !== undefined ? userDb.balance : 5000
             };
         });
-
         res.json(result);
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
+    } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
-app.post('/api/set-nickname', (req, res) => {
+app.post('/api/set-nickname', async (req, res) => {
     const { targetId, nickname } = req.body;
-    if (!targetId) return res.status(400).json({ error: "Target ID required" });
-
-    if (nickname && nickname.trim() !== "") {
-        MOCK_DB.minecraftNicks[targetId] = nickname;
-    } else {
-        delete MOCK_DB.minecraftNicks[targetId];
-    }
+    if (!targetId) return res.status(400).json({ error: "ID required" });
+    if (!checksPool) return res.status(503).json({ error: "DB Error" });
     
-    res.json({ success: true, nickname: MOCK_DB.minecraftNicks[targetId] });
+    // Ensure user exists first
+    await getUserData(targetId);
+    await checksPool.query('UPDATE web_users SET minecraft_nick = ? WHERE discord_id = ?', [nickname || null, targetId]);
+    res.json({ success: true, nickname });
 });
 
-app.post('/api/set-banner', (req, res) => {
+app.post('/api/set-banner', async (req, res) => {
     const { targetId, bannerUrl } = req.body;
-    if (!targetId) return res.status(400).json({ error: "Target ID required" });
-
-    if (bannerUrl && bannerUrl.trim() !== "") {
-        MOCK_DB.banners[targetId] = bannerUrl;
-    } else {
-        delete MOCK_DB.banners[targetId];
-    }
+    if (!targetId) return res.status(400).json({ error: "ID required" });
+    if (!checksPool) return res.status(503).json({ error: "DB Error" });
     
-    res.json({ success: true, bannerUrl: MOCK_DB.banners[targetId] });
+    await getUserData(targetId);
+    await checksPool.query('UPDATE web_users SET banner_url = ? WHERE discord_id = ?', [bannerUrl || null, targetId]);
+    res.json({ success: true, bannerUrl });
 });
 
-app.get('/api/logs/:userId', (req, res) => {
-    const userId = req.params.userId;
-    const userLogs = MOCK_DB.logs.filter(l => l.targetId === userId).reverse();
-    res.json(userLogs);
+app.get('/api/logs/:userId', async (req, res) => {
+    if (!checksPool) return res.json([]);
+    const [rows] = await checksPool.query('SELECT * FROM web_logs WHERE target_id = ? ORDER BY date DESC', [req.params.userId]);
+    // Format for frontend
+    const formatted = rows.map(r => ({
+        id: r.id, targetId: r.target_id, adminId: r.admin_id, action: r.action, reason: r.reason, date: r.date
+    }));
+    res.json(formatted);
 });
 
-// Endpoint for Notification Polling
-app.get('/api/updates', (req, res) => {
-    // Return counts and last items so client can check if something changed
+app.get('/api/updates', async (req, res) => {
+    let logsCount = 0;
+    if (checksPool) {
+        const [rows] = await checksPool.query('SELECT COUNT(*) as count FROM web_logs');
+        logsCount = rows[0].count;
+    }
     res.json({
-        logsCount: MOCK_DB.logs.length,
-        appealsCount: MOCK_DB.appeals.length,
-        loaRequestsCount: MOCK_DB.loaRequests.length,
-        lastLog: MOCK_DB.logs[MOCK_DB.logs.length - 1],
-        lastAppeal: MOCK_DB.appeals[MOCK_DB.appeals.length - 1],
-        lastLoaRequest: MOCK_DB.loaRequests[MOCK_DB.loaRequests.length - 1]
+        logsCount: logsCount,
+        appealsCount: TEMP_DB.appeals.length,
+        loaRequestsCount: TEMP_DB.loaRequests.length,
+        lastLog: null, // Simplified for polling
+        lastAppeal: TEMP_DB.appeals[TEMP_DB.appeals.length - 1],
+        lastLoaRequest: TEMP_DB.loaRequests[TEMP_DB.loaRequests.length - 1]
     });
 });
 
-app.get('/api/appeals', (req, res) => {
-    // Returns pending appeals
-    res.json(MOCK_DB.appeals.filter(a => a.status === 'pending').reverse());
-});
+app.get('/api/appeals', (req, res) => { res.json(TEMP_DB.appeals.filter(a => a.status === 'pending').reverse()); });
 
 app.post('/api/appeals/resolve', async (req, res) => {
-    const { appealId, action, adminId } = req.body; // action: 'approve' | 'reject'
-    
-    const appeal = MOCK_DB.appeals.find(a => a.id === appealId);
-    if (!appeal) return res.status(404).json({ error: "Appeal not found" });
-
+    const { appealId, action, adminId } = req.body;
+    const appeal = TEMP_DB.appeals.find(a => a.id === appealId);
+    if (!appeal) return res.status(404).json({ error: "Not found" });
     appeal.status = action === 'approve' ? 'approved' : 'rejected';
 
     try {
         const user = await client.users.fetch(appeal.userId);
         if (action === 'approve') {
             await user.send(`✅ **Ваша апелляция принята!**\nВарн будет снят.`);
-             MOCK_DB.logs.push({
-                id: Date.now().toString(),
-                targetId: appeal.userId,
-                adminId: adminId,
-                action: 'unwarn',
-                reason: 'Апелляция одобрена',
-                date: new Date().toISOString()
-            });
+            await addWebLog(appeal.userId, adminId, 'unwarn', 'Апелляция одобрена', `Appeal ID: ${appealId}`);
             logActionToDiscord('unwarn', user, { id: adminId }, 'Апелляция одобрена', `Appeal ID: ${appealId}`);
-
-        } else {
-            await user.send(`❌ **Ваша апелляция отклонена.**\nРешение администрации окончательно.`);
-        }
+        } else await user.send(`❌ **Ваша апелляция отклонена.**`);
     } catch(e) {}
-
     res.json({ success: true });
 });
 
-// --- NEW LOA SYSTEM ROUTES ---
-
-app.get('/api/loa/requests', (req, res) => {
-    res.json(MOCK_DB.loaRequests);
-});
+app.get('/api/loa/requests', (req, res) => { res.json(TEMP_DB.loaRequests); });
 
 app.post('/api/loa/request', (req, res) => {
     const { userId, username, duration, reason } = req.body;
-    
-    // Check if user already has pending request
-    if (MOCK_DB.loaRequests.find(r => r.userId === userId)) {
-        return res.status(400).json({ error: "У вас уже есть активная заявка на рассмотрении." });
-    }
-
-    const request = {
-        id: Date.now().toString(),
-        userId,
-        username,
-        duration,
-        reason,
-        date: new Date().toISOString()
-    };
-
-    MOCK_DB.loaRequests.push(request);
+    if (TEMP_DB.loaRequests.find(r => r.userId === userId)) return res.status(400).json({ error: "Есть активная заявка" });
+    TEMP_DB.loaRequests.push({ id: Date.now().toString(), userId, username, duration, reason, date: new Date().toISOString() });
     res.json({ success: true });
 });
 
 app.post('/api/loa/resolve', async (req, res) => {
-    const { requestId, action, adminId } = req.body; // action: 'approve' | 'reject'
-    
-    const requestIndex = MOCK_DB.loaRequests.findIndex(r => r.id === requestId);
-    if (requestIndex === -1) return res.status(404).json({ error: "Request not found" });
-
-    const request = MOCK_DB.loaRequests[requestIndex];
-    MOCK_DB.loaRequests.splice(requestIndex, 1); // Remove from queue
+    const { requestId, action, adminId } = req.body;
+    const idx = TEMP_DB.loaRequests.findIndex(r => r.id === requestId);
+    if (idx === -1) return res.status(404).json({ error: "Not found" });
+    const reqData = TEMP_DB.loaRequests[idx];
+    TEMP_DB.loaRequests.splice(idx, 1);
 
     if (action === 'approve') {
-        // Activate LOA
-        MOCK_DB.loa[request.userId] = {
-            active: true,
-            start: Date.now(),
-            end: Date.now() + (request.duration * 24 * 60 * 60 * 1000),
-            reason: request.reason
-        };
-
+        TEMP_DB.loa[reqData.userId] = { active: true, start: Date.now(), end: Date.now() + (reqData.duration * 86400000), reason: reqData.reason };
         try {
-            const user = await client.users.fetch(request.userId);
-            const admin = await client.users.fetch(adminId).catch(() => ({ id: adminId, tag: 'Admin' }));
-            
-            await user.send(`✅ **Ваш отпуск одобрен!**\nСрок: ${request.duration} дн.\nОдобрил: <@${adminId}>`);
-            logActionToDiscord('loa', user, admin, "Отпуск одобрен куратором", `Срок: ${request.duration} дн. Причина: ${request.reason}`);
+            const user = await client.users.fetch(reqData.userId);
+            const admin = await client.users.fetch(adminId).catch(() => ({ id: adminId }));
+            await user.send(`✅ **Отпуск одобрен!**\nСрок: ${reqData.duration} дн.`);
+            logActionToDiscord('loa', user, admin, "Отпуск одобрен", `Срок: ${reqData.duration} дн.`);
+            await addWebLog(reqData.userId, adminId, 'loa', 'Отпуск одобрен', `${reqData.duration} дн`);
         } catch(e) {}
     } else {
-        try {
-            const user = await client.users.fetch(request.userId);
-            await user.send(`❌ **Заявка на отпуск отклонена.**\nПопробуйте позже или свяжитесь с куратором.`);
-        } catch(e) {}
+        try { (await client.users.fetch(reqData.userId)).send(`❌ **Заявка на отпуск отклонена.**`); } catch(e) {}
     }
-
     res.json({ success: true });
 });
 
-// Manually stop LOA (no approval needed to come BACK to work)
 app.post('/api/loa/stop', async (req, res) => {
     const { userId } = req.body;
-    
-    if (MOCK_DB.loa[userId]) {
-        MOCK_DB.loa[userId].active = false;
-        try {
-            const user = await client.users.fetch(userId);
-            logActionToDiscord('loa', user, user, "Вернулся из неактива (Вручную)", "Статус: Active");
-        } catch(e) {}
+    if (TEMP_DB.loa[userId]) {
+        TEMP_DB.loa[userId].active = false;
+        await addWebLog(userId, userId, 'loa', 'Вернулся из неактива', 'Manual stop');
     }
-
     res.json({ success: true });
 });
 
 app.post('/api/action', async (req, res) => {
-    const { action, targetId, targetRoleId, reason, warnCount, adminId } = req.body;
-    console.log(`[Action] ${action} -> ${targetId}`);
-
+    const { action, targetId, reason, warnCount, adminId } = req.body;
     try {
         const guild = await client.guilds.fetch(GUILD_ID);
         const member = await guild.members.fetch({ user: targetId, force: true }).catch(() => null);
         if (!member) return res.status(404).json({ error: 'Member not found' });
-
-        let logDetails = "";
-        let finalAction = action;
-
-        // Auto Promote/Demote Logic
+        
+        let logDetails = "", finalAction = action;
         if (action === 'promote' || action === 'demote') {
-            // 1. Find current rank index
             const currentRoleIds = member.roles.cache.map(r => r.id);
             let currentRankIndex = -1;
-            
-            // Find highest rank they have
-            for (let i = RANK_ROLE_IDS.length - 1; i >= 0; i--) {
-                if (currentRoleIds.includes(RANK_ROLE_IDS[i])) {
-                    currentRankIndex = i;
-                    break;
-                }
-            }
-
-            let newRankIndex = currentRankIndex;
-            if (action === 'promote') newRankIndex++;
-            if (action === 'demote') newRankIndex--;
-
-            // Boundary checks
-            if (newRankIndex < 0) return res.status(400).json({ error: "Нельзя понизить ниже Стажера." });
-            if (newRankIndex >= RANK_ROLE_IDS.length) return res.status(400).json({ error: "Достигнут максимальный ранг." });
-
+            for (let i = RANK_ROLE_IDS.length - 1; i >= 0; i--) { if (currentRoleIds.includes(RANK_ROLE_IDS[i])) { currentRankIndex = i; break; } }
+            let newRankIndex = action === 'promote' ? currentRankIndex + 1 : currentRankIndex - 1;
+            if (newRankIndex < 0 || newRankIndex >= RANK_ROLE_IDS.length) return res.status(400).json({ error: "Ошибка границ ранга" });
             const newRoleId = RANK_ROLE_IDS[newRankIndex];
-            
-            // Apply changes
-            const rolesToRemove = member.roles.cache
-                .filter(role => RANK_ROLE_IDS.includes(role.id) && role.id !== newRoleId)
-                .map(role => role.id);
-            
+            const rolesToRemove = member.roles.cache.filter(role => RANK_ROLE_IDS.includes(role.id) && role.id !== newRoleId).map(role => role.id);
             if (rolesToRemove.length > 0) await member.roles.remove(rolesToRemove);
             await member.roles.add(newRoleId, reason);
-            
             logDetails = `Auto: ${currentRankIndex} -> ${newRankIndex}`;
-        } 
-        else if (action === 'kick') {
-             if (!member.kickable) return res.status(403).json({ error: 'Not kickable' });
-             await member.kick(reason);
-             logDetails = "Kicked";
-        }
+        } else if (action === 'kick') { await member.kick(reason); logDetails = "Kicked"; }
         else if (action === 'warn') {
-             logDetails = `Warn ${warnCount}/3`;
-             try {
-                const row = new ActionRowBuilder()
-                    .addComponents(
-                        new ButtonBuilder()
-                            .setCustomId('write_excuse')
-                            .setLabel('Написать объяснительную')
-                            .setStyle(ButtonStyle.Primary) 
-                            .setEmoji('📝')
-                    );
-                
-                await member.send({ 
-                    content: `⚠️ **ВЫ ПОЛУЧИЛИ ПРЕДУПРЕЖДЕНИЕ**\n\n**Причина:** ${reason}\n**Администратор:** <@${adminId}>\n**Счетчик:** ${warnCount}/3\n\nЕсли вы считаете наказание несправедливым, нажмите кнопку ниже для подачи апелляции/объяснительной.`,
-                    components: [row]
-                });
-            } catch(e) { logDetails += " (DM Failed)"; }
-        }
-        else if (action === 'unwarn') {
-            logDetails = `Unwarned manually`;
-            try { await member.send(`✅ **Варн снят!**\nПричина снятия: ${reason}`); } catch(e) {}
+            logDetails = `Warn ${warnCount}/3`;
+            const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('write_excuse').setLabel('Написать объяснительную').setStyle(ButtonStyle.Primary).setEmoji('📝'));
+            try { await member.send({ content: `⚠️ **ВЫ ПОЛУЧИЛИ ПРЕДУПРЕЖДЕНИЕ**\nПричина: ${reason}`, components: [row] }); } catch(e) {}
         }
 
-        // Записываем в "БД"
-        MOCK_DB.logs.push({
-            id: Date.now().toString(),
-            targetId,
-            adminId,
-            action: finalAction,
-            reason,
-            date: new Date().toISOString()
-        });
-
+        await addWebLog(targetId, adminId, finalAction, reason, logDetails);
         logActionToDiscord(finalAction, member.user, { id: adminId }, reason, logDetails);
         res.json({ success: true });
-
-    } catch (error) {
-        console.error("API Error:", error);
-        res.status(500).json({ error: error.message });
-    }
+    } catch (error) { res.status(500).json({ error: error.message }); }
 });
 
 app.listen(PORT, () => console.log(`✅ Server running on ${PORT}`));
